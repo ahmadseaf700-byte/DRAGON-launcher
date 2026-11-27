@@ -238,7 +238,7 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
     }
     let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"complete","done":1,"total":1}));
     Ok(InstallResult { version: version_id, game_directory: root.to_string_lossy().into_owned(),
-        downloaded_bytes: total_bytes, libraries: installed_libraries, assets: asset_count })
+        downloaded_bytes: total_bytes, libraries: installed_libraries, natives: installed_natives, assets: asset_count })
 }
 
 #[tauri::command]
