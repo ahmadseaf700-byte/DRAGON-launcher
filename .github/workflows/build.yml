@@ -27,8 +27,28 @@ jobs:
         with:
           node-version: 20
 
+      - name: Cache npm packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            src-tauri/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Install frontend dependencies
         run: npm install
@@ -66,6 +86,14 @@ jobs:
         with:
           node-version: 20
 
+      - name: Cache npm packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('package.json') }}
+          restore-keys: |
+            ${{ runner.os }}-npm-
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -87,14 +115,41 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
+      - name: Cache Cargo dependencies and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            src-tauri/target
+          key: ${{ runner.os }}-android-cargo-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-android-cargo-
+
       - name: Install cargo-ndk
-        run: cargo install cargo-ndk --locked
+        run: |
+          if ! command -v cargo-ndk >/dev/null 2>&1; then
+            cargo install cargo-ndk --locked
+          else
+            echo "cargo-ndk already restored from cache"
+          fi
 
       - name: Install frontend dependencies
         run: npm install
 
       - name: Initialize Android project
         run: npm run tauri -- android init
+
+      - name: Cache Gradle distributions and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper/dists
+          key: ${{ runner.os }}-gradle-${{ hashFiles('src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties', 'src-tauri/gen/android/**/*.gradle', 'src-tauri/gen/android/**/*.gradle.kts', 'src-tauri/gen/android/gradle/libs.versions.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
       - name: Generate application icons
         run: npm run tauri -- icon src-tauri/icons/dragon.svg --output ./src-tauri/icons
@@ -121,9 +176,9 @@ jobs:
             fi
           done
 
-          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' ! -name '*unsigned*' -o -type f -name '*unsigned*.apk' | head -n 1)"
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' ! -name '*unsigned*.apk' | head -n 1)"
           if [ -z "$APK" ]; then
-            echo "::error::Tauri did not produce an APK."
+            echo "::error::Tauri did not produce a signed or signable APK."
             exit 1
           fi
 
