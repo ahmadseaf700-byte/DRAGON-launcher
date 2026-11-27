@@ -131,7 +131,7 @@ export default function App() {
     { id: "home", label: t.home, icon: Home },
     { id: "versions", label: t.versions, icon: Layers3 },
     { id: "instances", label: lang === "ar" ? "نسخ اللعبة" : "Instances", icon: Gamepad2 },
-    { id: "mods", label: t.library, icon: Blocks },
+    { id: "mods", label: lang === "ar" ? "مكتبة المودات" : "Mods Library", icon: Blocks },
     { id: "news", label: t.news, icon: Newspaper },
     { id: "accounts", label: t.accounts, icon: UserRound },
     { id: "keybinds", label: lang === "ar" ? "الأزرار" : "Keybinds", icon: Keyboard },
@@ -214,7 +214,7 @@ export default function App() {
            ) : activeTab === "instances" ? (
             <InstancesPanel lang={lang} selectedId={selectedInstance?.id ?? null} onSelect={(item) => { setSelectedInstance(item); if (item) localStorage.setItem("dragon.activeInstance", JSON.stringify(item)); else localStorage.removeItem("dragon.activeInstance"); setLaunchMessage(item ? (lang === "ar" ? `النسخة المحددة: ${item.name}` : `Selected instance: ${item.name}`) : ""); }} />
           ) : activeTab === "mods" ? (
-            <LibraryCatalog lang={lang} />
+            <LibraryCatalog lang={lang} instanceId={selectedInstance?.id ?? null} />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
           ) : activeTab === "keybinds" ? (
