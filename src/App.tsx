@@ -9,6 +9,7 @@ import { translations } from "./locales/translations";
 import VersionCatalog from "./components/VersionCatalog";
 import AccountsPanel from "./components/AccountsPanel";
 import SettingsPanel from "./components/SettingsPanel";
+import ModrinthCatalog from "./components/ModrinthCatalog";
 
 interface SystemEnv {
   os: string;
@@ -92,6 +93,10 @@ export default function App() {
 
           {activeTab === "versions" ? (
             <VersionCatalog lang={lang} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />
+          ) : activeTab === "mods" ? (
+            <ModrinthCatalog lang={lang} kind="mod" />
+          ) : activeTab === "modpacks" ? (
+            <ModrinthCatalog lang={lang} kind="modpack" />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
           ) : activeTab === "settings" ? (
