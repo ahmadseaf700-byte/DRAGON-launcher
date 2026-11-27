@@ -444,7 +444,7 @@ fn save_launcher_config(app: tauri::AppHandle, config: Value) -> Result<(), Stri
 }
 
 #[tauri::command]
-async fn download_modrinth_file(_app: tauri::AppHandle, url: String, filename: String, kind: String) -> Result<String, String> {
+async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid download URL: {e}"))?;
     if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
         return Err("Downloads are only allowed from the official Modrinth CDN over HTTPS".to_string());
@@ -459,7 +459,10 @@ async fn download_modrinth_file(_app: tauri::AppHandle, url: String, filename: S
     let bytes = response.bytes().await.map_err(|e| e.to_string())?;
     if bytes.is_empty() { return Err("The downloaded file is empty".to_string()); }
     let data_dir = launcher_data_dir()?;
-    let base = if kind == "mod" { data_dir.join("game").join(folder) } else { data_dir.join(folder) };
+    let config_path = config_file(&app)?;
+    let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
+    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
+    let base = if kind == "mod" { game_dir.join(folder) } else { data_dir.join(folder) };
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let destination = base.join(&filename);
     fs::write(&destination, &bytes).map_err(|e| e.to_string())?;
@@ -468,7 +471,7 @@ async fn download_modrinth_file(_app: tauri::AppHandle, url: String, filename: S
 
 
 #[tauri::command]
-fn import_external_mod(filename: String, data_base64: String) -> Result<String, String> {
+fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String) -> Result<String, String> {
     if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".jar")
         || filename.contains('/') || filename.contains('\\')
         || filename == "." || filename == ".." {
@@ -481,7 +484,11 @@ fn import_external_mod(filename: String, data_base64: String) -> Result<String, 
     if bytes.len() < 4 || bytes.len() > 100 * 1024 * 1024 || &bytes[0..2] != b"PK" {
         return Err("The selected file is not a valid JAR/ZIP archive or exceeds 100 MB".to_string());
     }
-    let mods_dir = launcher_data_dir()?.join("game").join("mods");
+    let data_dir = launcher_data_dir()?;
+    let config_path = config_file(&app)?;
+    let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
+    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
+    let mods_dir = game_dir.join("mods");
     fs::create_dir_all(&mods_dir).map_err(|e| format!("Could not create mods folder: {e}"))?;
     let mut destination = mods_dir.join(&filename);
     if destination.exists() {
