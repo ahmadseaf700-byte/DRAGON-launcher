@@ -615,7 +615,9 @@ fn create_game_instance(name: String, version_id: String) -> Result<Value, Strin
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let created_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?.as_millis() as u64;
-    let id = format!("{}-{}", created_at, md5::compute(format!("{name}:{version_id}:{created_at}")));
+    let digest = md5::compute(format!("{name}:{version_id}:{created_at}"));
+    let digest_hex = digest.0.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let id = format!("{created_at}-{digest_hex}");
     let instance_dir = root.join(&id);
     fs::create_dir_all(&instance_dir).map_err(|e| e.to_string())?;
     for folder in ["mods", "config", "resourcepacks", "shaderpacks", "saves", "screenshots", "logs", "crash-reports"] {
