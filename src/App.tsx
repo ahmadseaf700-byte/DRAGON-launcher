@@ -7,6 +7,8 @@ import {
 import { useLauncherStore, type TabType } from "./store/useLauncherStore";
 import { translations } from "./locales/translations";
 import VersionCatalog from "./components/VersionCatalog";
+import AccountsPanel from "./components/AccountsPanel";
+import SettingsPanel from "./components/SettingsPanel";
 
 interface SystemEnv {
   os: string;
