@@ -61,6 +61,7 @@ export default function InstancesPanel({ lang, selectedId, onSelect }: { lang: L
     try {
       await invoke("delete_game_instance", { instanceId: item.id });
       setItems(current => current.filter(entry => entry.id !== item.id));
+      if (selectedId === item.id) onSelect(null);
       setNotice(ar ? "تم حذف النسخة." : "Instance deleted.");
     } catch (e) { setError(String(e)); }
     finally { setBusy(""); }

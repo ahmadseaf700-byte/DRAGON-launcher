@@ -192,7 +192,7 @@ export default function App() {
            ) : activeTab === "instances" ? (
             <InstancesPanel lang={lang} selectedId={selectedInstance?.id ?? null} onSelect={(item) => { setSelectedInstance(item); if (item) localStorage.setItem("dragon.activeInstance", JSON.stringify(item)); else localStorage.removeItem("dragon.activeInstance"); setLaunchMessage(item ? (lang === "ar" ? `النسخة المحددة: ${item.name}` : `Selected instance: ${item.name}`) : ""); }} />
           ) : activeTab === "mods" ? (
-            <LibraryCatalog lang={lang} />
+            <LibraryCatalog lang={lang} selectedInstanceId={selectedInstance?.id ?? null} />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
           ) : activeTab === "keybinds" ? (
