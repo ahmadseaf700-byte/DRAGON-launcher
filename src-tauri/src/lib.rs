@@ -933,14 +933,9 @@ fn launch_minecraft(
     if !java_check.status.success() {
         return Err(format!("Java لم تستجب لأمر فحص الإصدار: {}", String::from_utf8_lossy(&java_check.stderr)));
     }
-    let java_output = format!("{}{}", String::from_utf8_lossy(&java_check.stdout), String::from_utf8_lossy(&java_check.stderr));
-    let java_version_text = java_output.split('"').nth(1)
-        .ok_or_else(|| "تعذر قراءة إصدار Java المثبّت.".to_string())?;
-    let java_major = if java_version_text.starts_with("1.") {
-        java_version_text.split('.').nth(1).and_then(|v| v.parse::<u32>().ok())
-    } else {
-        java_version_text.split('.').next().and_then(|v| v.parse::<u32>().ok())
-    }.ok_or_else(|| format!("تعذر تحليل إصدار Java: {java_version_text}"))?;
+    let java_output = format!("{}{}", String::from_utf8_lossy(&java_check.stderr), String::from_utf8_lossy(&java_check.stdout));
+    let java_major = parse_java_major(&java_output)
+        .ok_or_else(|| format!("تعذر تحليل إصدار Java من الناتج: {}", java_output.trim()))?;
     if let Some(required) = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64) {
         if (java_major as u64) < required {
             return Err(format!("هذا الإصدار يحتاج Java {required} أو أحدث، بينما المثبّت هو Java {java_major}."));
