@@ -46,11 +46,11 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
     try {
       unlisten = await listen<{ stage: string; done: number; total: number }>("minecraft-install-progress", event => {
         const labels: Record<string, string> = ar
-          ? { client: "تم تنزيل ملف اللعبة", libraries: "تنزيل المكتبات", assets: "تنزيل أصول اللعبة", complete: "اكتمل تجهيز ملفات الإصدار" }
-          : { client: "Client downloaded", libraries: "Downloading libraries", assets: "Downloading game assets", complete: "Version files prepared" };
+          ? { client: "تم تنزيل ملف اللعبة", libraries: "تنزيل المكتبات", natives: "تجهيز مكتبات النظام الأصلية", assets: "تنزيل أصول اللعبة", complete: "اكتمل تجهيز ملفات الإصدار" }
+          : { client: "Client downloaded", libraries: "Downloading libraries", natives: "Extracting native libraries", assets: "Downloading game assets", complete: "Version files prepared" };
         setInstallMessage(labels[event.payload.stage] || event.payload.stage);
       });
-      const result = await invoke<{ version: string; game_directory: string; downloaded_bytes: number; libraries: number; assets: number }>("install_minecraft_version", { versionId: version });
+      const result = await invoke<{ version: string; game_directory: string; downloaded_bytes: number; libraries: number; natives: number; assets: number }>("install_minecraft_version", { versionId: version });
       setInstalledVersion(version);
       const mb = (result.downloaded_bytes / 1048576).toFixed(1);
       setInstallMessage(ar
