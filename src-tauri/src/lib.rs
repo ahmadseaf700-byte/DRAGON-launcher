@@ -223,6 +223,54 @@ mod java_version_tests {
     }
 }
 
+#[derive(Serialize)]
+struct JavaRuntimeCheck {
+    executable: String,
+    version: String,
+    major: Option<u32>,
+}
+
+#[tauri::command]
+fn validate_java_executable(path: String) -> Result<JavaRuntimeCheck, String> {
+    let raw = path.trim();
+    let candidate = if raw.is_empty() {
+        let (found, version, executable) = detect_java_runtime();
+        if !found {
+            return Err("لم يتم العثور على Java في JAVA_HOME أو PATH.".to_string());
+        }
+        let executable = executable.ok_or("تعذر تحديد مسار Java.")?;
+        let version = version.ok_or("تعذر قراءة إصدار Java.")?;
+        return Ok(JavaRuntimeCheck {
+            executable,
+            major: parse_java_major(&version),
+            version,
+        });
+    } else {
+        PathBuf::from(raw)
+    };
+    if !candidate.is_file() {
+        return Err(format!("ملف Java غير موجود: {}", candidate.display()));
+    }
+    let output = Command::new(&candidate).arg("-version").output()
+        .map_err(|e| format!("تعذر تشغيل Java: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("Java أعادت خطأ: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    let combined = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+    let version = combined.lines().find(|line| line.contains("version") || line.contains("openjdk"))
+        .map(|line| line.trim().to_string())
+        .ok_or("تعذر قراءة رقم إصدار Java من الناتج.")?;
+    let major = parse_java_major(&version);
+    if major.is_none() {
+        return Err(format!("تم تشغيل Java لكن تعذر تحليل إصدارها: {version}"));
+    }
+    Ok(JavaRuntimeCheck {
+        executable: candidate.to_string_lossy().into_owned(),
+        version,
+        major,
+    })
+}
+
 #[tauri::command]
 fn check_java_compatibility(app: tauri::AppHandle, version_id: String) -> Result<JavaCompatibility, String> {
     if version_id.is_empty() || version_id.len() > 64
@@ -1118,7 +1166,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
