@@ -50,7 +50,10 @@ fn allowed_mojang_url(raw: &str) -> Result<reqwest::Url, String> {
 
 async fn fetch_json(client: &reqwest::Client, url: &str) -> Result<Value, String> {
     let url = allowed_mojang_url(url)?;
-    let response = client.get(url).send().await.map_err(|e| format!("Metadata request failed: {e}"))?;
+    let response = client.get(url.clone()).send().await.map_err(|e| {
+        let kind = if e.is_timeout() { "timeout" } else if e.is_connect() { "connection/DNS/TLS" } else if e.is_request() { "request" } else { "network" };
+        format!("Metadata request failed ({kind}) for {}: {e}", url.host_str().unwrap_or("unknown host"))
+    })?;
     if !response.status().is_success() { return Err(format!("Metadata server returned HTTP {}", response.status())); }
     response.json::<Value>().await.map_err(|e| format!("Invalid Mojang JSON: {e}"))
 }
@@ -78,7 +81,10 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
     for attempt in 1..=3 {
         let result: Result<u64, String> = async {
             let response = client.get(url.clone()).send().await
-                .map_err(|e| format!("Request failed: {e}"))?;
+                .map_err(|e| {
+                    let kind = if e.is_timeout() { "timeout" } else if e.is_connect() { "connection/DNS/TLS" } else if e.is_request() { "request" } else { "network" };
+                    format!("Request failed ({kind}) for {}: {e}", url.host_str().unwrap_or("unknown host"))
+                })?;
             if !response.status().is_success() {
                 return Err(format!("Download server returned HTTP {}", response.status()));
             }
@@ -292,7 +298,12 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
        !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
     }
-    let client = reqwest::Client::builder().user_agent("DRAGON-Launcher/0.1.0").build()
+    let client = reqwest::Client::builder()
+        .user_agent("DRAGON-Launcher/0.1.0")
+        .connect_timeout(Duration::from_secs(25))
+        .timeout(Duration::from_secs(180))
+        .pool_idle_timeout(Duration::from_secs(30))
+        .build()
         .map_err(|e| format!("Could not initialize downloader: {e}"))?;
     let root = launcher_data_dir()?.join("game");
     fs::create_dir_all(&root).map_err(|e| format!("Could not create game directory: {e}"))?;
