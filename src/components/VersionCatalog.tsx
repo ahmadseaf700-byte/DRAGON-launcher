@@ -110,8 +110,8 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
         </div>
       </>}
       <p className="mt-4 border-t border-dragon-border pt-3 text-xs leading-6 text-amber-200/80">{ar
-        ? "التثبيت ينزّل ملف اللعبة والمكتبات المتوافقة وأصول اللعبة مع التحقق من SHA-1. تشغيل اللعبة ما زال يحتاج تجهيز Java والملفات الأصلية (natives) وبناء أمر التشغيل."
-        : "Installer downloads the client, compatible libraries and game assets with SHA-1 verification. Launching still requires Java runtime setup, native extraction and launch argument generation."}</p>
+        ? "التثبيت ينزّل ملف اللعبة والمكتبات وأصول اللعبة وملفات النظام الأصلية مع التحقق من SHA-1. لتشغيلها على الكمبيوتر، اضبط مسار Java إن لم يكن متاحاً في PATH وأنشئ حساباً محلياً. يلزم تسجيل Microsoft للعب بالحسابات الرسمية والخوادم المحمية."
+        : "Installer downloads the client, libraries, game assets and native files with SHA-1 verification. On desktop, configure Java if it is not available in PATH and create a local profile. Microsoft sign-in is required for official accounts and protected servers."}</p>
     </section>
   );
 }
