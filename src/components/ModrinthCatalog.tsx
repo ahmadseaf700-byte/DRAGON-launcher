@@ -17,7 +17,8 @@ export default function ModrinthCatalog({ lang, kind }: { lang: Language; kind: 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
-  const [notice, setNotice] = useState("");\n  const externalFileRef = useRef<HTMLInputElement>(null);
+  const [notice, setNotice] = useState("");
+  const externalFileRef = useRef<HTMLInputElement>(null);
 
   const search = async () => {
     setLoading(true); setError("");
