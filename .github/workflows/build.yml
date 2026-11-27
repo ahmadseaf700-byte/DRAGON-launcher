@@ -98,10 +98,48 @@ jobs:
       - name: Build Android APK
         run: npm run tauri -- android build --apk --target aarch64
 
-      - name: Upload Android APK
+      # A release APK must be signed with a persistent private keystore.
+      # Configure the four ANDROID_SIGNING_* repository secrets before running this job.
+      - name: Sign Android APK
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for name in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Missing GitHub Actions secret: $name"
+              exit 1
+            fi
+          done
+
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' ! -name '*unsigned*' -o -type f -name '*unsigned*.apk' | head -n 1)"
+          if [ -z "$APK" ]; then
+            echo "::error::Tauri did not produce an APK."
+            exit 1
+          fi
+
+          mkdir -p signed-apk
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > dragon-release.keystore
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+            --ks dragon-release.keystore \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
+            --key-pass env:ANDROID_KEY_PASSWORD \
+            --out signed-apk/DRAGON-Launcher.apk \
+            "$APK"
+
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose signed-apk/DRAGON-Launcher.apk
+          rm -f dragon-release.keystore
+
+      - name: Upload signed Android APK
         uses: actions/upload-artifact@v4
         with:
           name: DRAGON-Android-APK
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          path: signed-apk/DRAGON-Launcher.apk
           if-no-files-found: error
           retention-days: 14
