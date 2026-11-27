@@ -71,13 +71,60 @@ fn save_launcher_config(app: tauri::AppHandle, config: Value) -> Result<(), Stri
     Ok(())
 }
 
+#[tauri::command]
+async fn download_modrinth_file(
+    app: tauri::AppHandle,
+    url: String,
+    filename: String,
+    kind: String,
+) -> Result<String, String> {
+    let parsed = reqwest::Url::parse(&url)
+        .map_err(|error| format!("Invalid download URL: {error}"))?;
+    if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
+        return Err("Downloads are only allowed from the official Modrinth CDN over HTTPS".to_string());
+    }
+    let safe_name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Invalid download filename".to_string())?;
+    if safe_name != filename || filename.contains(['/', '\\\\']) {
+        return Err("Invalid download filename".to_string());
+    }
+    let folder = match kind.as_str() {
+        "mod" if filename.to_ascii_lowercase().ends_with(".jar") => "mods",
+        "modpack" if filename.to_ascii_lowercase().ends_with(".mrpack") => "modpacks",
+        _ => return Err("File type does not match the selected Modrinth project type".to_string()),
+    };
+    let response = reqwest::get(parsed).await
+        .map_err(|error| format!("Download request failed: {error}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Modrinth CDN returned HTTP {}", response.status()));
+    }
+    let bytes = response.bytes().await
+        .map_err(|error| format!("Could not read downloaded file: {error}"))?;
+    if bytes.is_empty() {
+        return Err("The downloaded file is empty".to_string());
+    }
+    let base = dirs::data_dir()
+        .ok_or_else(|| "Could not resolve application data directory".to_string())?
+        .join("DRAGONLauncher")
+        .join(folder);
+    fs::create_dir_all(&base)
+        .map_err(|error| format!("Could not create {folder} directory: {error}"))?;
+    let destination = base.join(&filename);
+    fs::write(&destination, &bytes)
+        .map_err(|error| format!("Could not save downloaded file: {error}"))?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             get_system_environment,
             load_launcher_config,
-            save_launcher_config
+            save_launcher_config,
+            download_modrinth_file
         ])
         .run(tauri::generate_context!())
         .expect("Failed to run DRAGON Launcher");
