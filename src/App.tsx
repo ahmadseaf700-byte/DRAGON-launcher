@@ -5,7 +5,8 @@ import {
   Layers3, Newspaper, Play, Server, Settings, UserRound, type LucideIcon
 } from "lucide-react";
 import { useLauncherStore, type TabType } from "./store/useLauncherStore";
-import { translations } from "./locales/translations";\nimport VersionCatalog from "./components/VersionCatalog";
+import { translations } from "./locales/translations";
+import VersionCatalog from "./components/VersionCatalog";
 
 interface SystemEnv {
   os: string;
@@ -99,7 +100,9 @@ export default function App() {
           </button>
         </header>
 
-        {activeTab === "versions" ? (\n          <VersionCatalog lang={lang} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />\n        ) : activeTab === "home" ? (
+        {activeTab === "versions" ? (
+          <VersionCatalog lang={lang} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />
+        ) : activeTab === "home" ? (
           <>
             <section className="relative overflow-hidden rounded-3xl border border-dragon-border bg-gradient-to-br from-dragon-card via-[#171827] to-[#301321] p-6 shadow-glow sm:p-9">
               <div className="pointer-events-none absolute -end-12 -top-20 h-64 w-64 rounded-full bg-rose-600/10 blur-3xl" />
