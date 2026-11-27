@@ -380,13 +380,13 @@ fn launch_minecraft(
         return Err("Invalid Minecraft version identifier".to_string());
     }
 
+    if !is_minecraft_version_installed(version_id.clone())? {
+        return Err("ملفات هذا الإصدار أو إحدى المكتبات أو أصول اللعبة ناقصة. أعد تثبيت الإصدار قبل التشغيل.".to_string());
+    }
     let root = launcher_data_dir()?.join("game");
     let version_dir = root.join("versions").join(&version_id);
     let metadata_path = version_dir.join(format!("{version_id}.json"));
     let client_jar = version_dir.join(format!("{version_id}.jar"));
-    if !metadata_path.is_file() || !client_jar.is_file() {
-        return Err("هذا الإصدار غير مثبت بالكامل. نزّله أولاً من صفحة الإصدارات.".to_string());
-    }
     let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path).map_err(|e| e.to_string())?)
         .map_err(|e| format!("Invalid version metadata: {e}"))?;
     let app_config = config_file(&app)?;
@@ -395,6 +395,24 @@ fn launch_minecraft(
             .map_err(|e| format!("Invalid launcher config: {e}"))?
     } else { json!({}) };
     let java_path = config.get("java_path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).unwrap_or("java");
+    let java_check = Command::new(java_path).arg("-version").output()
+        .map_err(|e| format!("تعذر العثور على Java ({java_path}). ثبّت Java أو حدّد مسارها من الإعدادات: {e}"))?;
+    if !java_check.status.success() {
+        return Err(format!("Java لم تستجب لأمر فحص الإصدار: {}", String::from_utf8_lossy(&java_check.stderr)));
+    }
+    let java_output = format!("{}{}", String::from_utf8_lossy(&java_check.stdout), String::from_utf8_lossy(&java_check.stderr));
+    let java_version_text = java_output.split('"').nth(1)
+        .ok_or_else(|| "تعذر قراءة إصدار Java المثبّت.".to_string())?;
+    let java_major = if java_version_text.starts_with("1.") {
+        java_version_text.split('.').nth(1).and_then(|v| v.parse::<u32>().ok())
+    } else {
+        java_version_text.split('.').next().and_then(|v| v.parse::<u32>().ok())
+    }.ok_or_else(|| format!("تعذر تحليل إصدار Java: {java_version_text}"))?;
+    if let Some(required) = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64) {
+        if java_major as u64 < required {
+            return Err(format!("هذا الإصدار يحتاج Java {required} أو أحدث، بينما المثبّت هو Java {java_major}."));
+        }
+    }
     let game_dir = config.get("game_directory").and_then(Value::as_str)
         .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| root.clone());
     fs::create_dir_all(&game_dir).map_err(|e| format!("Could not create game directory: {e}"))?;
@@ -405,7 +423,10 @@ fn launch_minecraft(
             if let Some(path) = library.pointer("/downloads/artifact/path").and_then(Value::as_str) {
                 let rel = safe_relative_path(path)?;
                 let artifact = root.join("libraries").join(rel);
-                if artifact.is_file() { classpath_entries.push(artifact.to_string_lossy().into_owned()); }
+                if !artifact.is_file() {
+                    return Err(format!("مكتبة Minecraft المطلوبة غير موجودة: {}", artifact.display()));
+                }
+                classpath_entries.push(artifact.to_string_lossy().into_owned());
             }
         }
     }
