@@ -176,11 +176,15 @@ jobs:
             fi
           done
 
-          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' ! -name '*unsigned*.apk' | head -n 1)"
+          # Tauri release builds intentionally produce an unsigned APK.
+          # Pass that APK to apksigner instead of filtering it out.
+          APK="$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | sort | head -n 1)"
           if [ -z "$APK" ]; then
-            echo "::error::Tauri did not produce a signed or signable APK."
+            echo "::error::Tauri did not produce an APK."
+            find src-tauri/gen/android/app/build/outputs -maxdepth 5 -type f -print || true
             exit 1
           fi
+          echo "Signing APK: $APK"
 
           mkdir -p signed-apk
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > dragon-release.keystore
