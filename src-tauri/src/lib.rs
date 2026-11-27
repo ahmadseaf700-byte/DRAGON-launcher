@@ -737,7 +737,7 @@ fn save_launcher_config(app: tauri::AppHandle, config: Value) -> Result<(), Stri
 }
 
 #[tauri::command]
-async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String) -> Result<String, String> {
+async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String, instance_id: Option<String>) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid download URL: {e}"))?;
     if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
         return Err("Downloads are only allowed from the official Modrinth CDN over HTTPS".to_string());
@@ -772,7 +772,16 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     let config_path = config_file(&app)?;
     let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
     let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let base = if kind == "mod" { game_dir.join(folder) } else { data_dir.join(folder) };
+    let base = if kind == "mod" {
+        if let Some(id) = instance_id.as_deref() {
+            if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+                return Err("Invalid instance identifier".to_string());
+            }
+            let instance_dir = data_dir.join("instances").join(id);
+            if !instance_dir.join("instance.json").is_file() { return Err("Selected instance was not found".to_string()); }
+            instance_dir.join(folder)
+        } else { game_dir.join(folder) }
+    } else { data_dir.join(folder) };
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let mut destination = base.join(&filename);
     if destination.exists() {
@@ -799,7 +808,7 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
 
 
 #[tauri::command]
-fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String) -> Result<String, String> {
+fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String, instance_id: Option<String>) -> Result<String, String> {
     if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".jar")
         || filename.contains('/') || filename.contains('\\')
         || filename == "." || filename == ".." {
@@ -816,7 +825,14 @@ fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: Str
     let config_path = config_file(&app)?;
     let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
     let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let mods_dir = game_dir.join("mods");
+    let mods_dir = if let Some(id) = instance_id.as_deref() {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let instance_dir = data_dir.join("instances").join(id);
+        if !instance_dir.join("instance.json").is_file() { return Err("Selected instance was not found".to_string()); }
+        instance_dir.join("mods")
+    } else { game_dir.join("mods") };
     fs::create_dir_all(&mods_dir).map_err(|e| format!("Could not create mods folder: {e}"))?;
     let mut destination = mods_dir.join(&filename);
     if destination.exists() {
@@ -830,6 +846,86 @@ fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: Str
         }
     }
     fs::write(&destination, bytes).map_err(|e| format!("Could not save imported mod: {e}"))?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn list_downloaded_game_content(app: tauri::AppHandle, folder: String, instance_id: Option<String>) -> Result<Vec<Value>, String> {
+    if !["mods", "resourcepacks"].contains(&folder.as_str()) {
+        return Err("Only mods and resourcepacks can be listed".to_string());
+    }
+    let data_dir = launcher_data_dir()?;
+    let config_path = config_file(&app)?;
+    let config: Value = if config_path.exists() {
+        serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({}))
+    } else { json!({}) };
+    let game_dir = config.get("game_directory").and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
+    let mut roots: Vec<(PathBuf, String)> = vec![(game_dir.join(&folder), "عام".to_string())];
+    if let Some(id) = instance_id.as_deref() {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let instance_dir = data_dir.join("instances").join(id);
+        if !instance_dir.join("instance.json").is_file() { return Err("Selected instance was not found".to_string()); }
+        roots.push((instance_dir.join(&folder), format!("instance:{id}")));
+    }
+    let mut items = Vec::new();
+    for (root, source) in roots {
+        if !root.exists() { continue; }
+        for entry in fs::read_dir(&root).map_err(|e| format!("Could not read {}: {e}", root.display()))? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            let metadata = entry.metadata().map_err(|e| e.to_string())?;
+            if folder == "mods" && (!metadata.is_file() || path.extension().and_then(|x| x.to_str()) != Some("jar")) { continue; }
+            if folder == "resourcepacks" && metadata.is_file() && path.extension().and_then(|x| x.to_str()).map(|x| !x.eq_ignore_ascii_case("zip")).unwrap_or(true) { continue; }
+            items.push(json!({
+                "name": entry.file_name().to_string_lossy().into_owned(),
+                "path": path.to_string_lossy().into_owned(),
+                "size": if metadata.is_file() { metadata.len() } else { 0 },
+                "directory": metadata.is_dir(),
+                "source": source
+            }));
+        }
+    }
+    items.sort_by(|a,b| a.get("name").and_then(Value::as_str).unwrap_or("").to_lowercase()
+        .cmp(&b.get("name").and_then(Value::as_str).unwrap_or("").to_lowercase()));
+    Ok(items)
+}
+
+#[tauri::command]
+fn import_external_resourcepack(filename: String, data_base64: String, instance_id: Option<String>) -> Result<String, String> {
+    if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".zip")
+        || filename.contains('/') || filename.contains('\\') || filename == "." || filename == ".." {
+        return Err("Choose a valid .zip resource pack".to_string());
+    }
+    if data_base64.len() > 360_000_000 { return Err("Resource pack exceeds the 256 MB import limit".to_string()); }
+    let bytes = BASE64.decode(data_base64).map_err(|_| "Invalid encoded file data".to_string())?;
+    if bytes.len() < 4 || bytes.len() > 256 * 1024 * 1024 || &bytes[0..2] != b"PK" {
+        return Err("The selected file is not a valid ZIP resource pack or exceeds 256 MB".to_string());
+    }
+    let data_dir = launcher_data_dir()?;
+    let base = if let Some(id) = instance_id.as_deref() {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let instance_dir = data_dir.join("instances").join(id);
+        if !instance_dir.join("instance.json").is_file() { return Err("Selected instance was not found".to_string()); }
+        instance_dir.join("resourcepacks")
+    } else { data_dir.join("game").join("resourcepacks") };
+    fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let mut destination = base.join(&filename);
+    if destination.exists() {
+        let stem = Path::new(&filename).file_stem().and_then(|v| v.to_str()).unwrap_or("resourcepack");
+        let mut index = 2u32;
+        loop {
+            destination = base.join(format!("{stem}-{index}.zip"));
+            if !destination.exists() { break; }
+            index += 1;
+            if index > 10_000 { return Err("Too many files with the same name".to_string()); }
+        }
+    }
+    fs::write(&destination, bytes).map_err(|e| format!("Could not save resource pack: {e}"))?;
     Ok(destination.to_string_lossy().into_owned())
 }
 
@@ -1001,6 +1097,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![get_system_environment, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
-            save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
+            save_launcher_config, download_modrinth_file, list_downloaded_game_content, import_external_resourcepack, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
