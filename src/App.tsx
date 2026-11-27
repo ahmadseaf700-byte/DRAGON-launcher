@@ -79,7 +79,8 @@ export default function App() {
     invoke<SystemEnv>("get_system_environment").then(setSystem).catch(() => setSystemError(true));
   }, [native]);
 
-  // App-level listener survives page changes and refreshes one grouped Android notification.
+  // Keep the in-app progress display updated without sending notifications for each file.
+  // A single notification is sent only after the full installation succeeds.
   useEffect(() => {
     if (!native) return;
     let unlisten: (() => void) | undefined;
@@ -88,9 +89,6 @@ export default function App() {
       const p = event.payload;
       if (p.stage === "complete") return;
       setPlayProgress({ stage: p.stage, done: p.done, total: p.total });
-      const percent = p.total > 0 ? Math.min(100, Math.floor(p.done / p.total * 100)) : 0;
-      const names: Record<string, string> = { client: "ملف اللعبة", libraries: "المكتبات", natives: "ملفات النظام", assets: "أصول اللعبة" };
-      sendNotification({ id: 7311, title: "DRAGON Launcher", body: `تنزيل Minecraft ${p.version}: ${names[p.stage] || p.stage} — ${percent}% (${p.done}/${p.total})`, ongoing: true, autoCancel: false });
     }).then(fn => { if (cancelled) fn(); else unlisten = fn; });
     return () => { cancelled = true; unlisten?.(); };
   }, [native]);
@@ -211,7 +209,7 @@ export default function App() {
     try {
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === "granted";
-      if (!granted) throw new Error(lang === "ar" ? "اسمح بالإشعارات لتلقي تقدم التنزيل." : "Allow notifications to receive download progress.");
+      if (!granted) throw new Error(lang === "ar" ? "اسمح بالإشعارات لتلقي تنبيه عند اكتمال التنزيل." : "Allow notifications to be alerted when the download completes.");
       const installed = await invoke<boolean>("is_minecraft_version_installed", { versionId: playVersion.trim() });
       if (!installed) await invoke("install_minecraft_version", { versionId: playVersion.trim() });
       const instance = await invoke<GameInstance>("create_game_instance", { name: playInstanceName.trim(), versionId: playVersion.trim() });
