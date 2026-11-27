@@ -38,6 +38,8 @@ export default function App() {
   const effectiveVersion = selectedInstance?.version_id || selectedVersion;
   const [stoppingGame, setStoppingGame] = useState(false);
 
+  const native = isTauri();
+
   // Reconcile the saved selection against the native instance registry on every app start.
   // This prevents stale localStorage data from pointing Play at a deleted or changed instance.
   useEffect(() => {
@@ -58,7 +60,6 @@ export default function App() {
       });
     return () => { cancelled = true; };
   }, [native]);
-  const native = isTauri();
 
   useEffect(() => {
     document.documentElement.lang = lang;
