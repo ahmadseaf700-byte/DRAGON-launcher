@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::{fs, io, path::{Path, PathBuf}, process::{Command, Stdio}};
+use std::{fs, io::{self, Read, Write}, net::{TcpStream, ToSocketAddrs}, path::{Path, PathBuf}, process::{Command, Stdio}, time::{Duration, Instant}};
 use sysinfo::System;
 use tauri::{Emitter, Manager};
 use zip::ZipArchive;
@@ -541,10 +541,136 @@ fn read_game_log(app: tauri::AppHandle) -> Result<String, String> {
     Ok(combined)
 }
 
+
+
+#[derive(Serialize)]
+struct ServerPingResult {
+    online: bool,
+    host: String,
+    port: u16,
+    latency_ms: Option<u128>,
+    players_online: Option<u32>,
+    players_max: Option<u32>,
+    version: Option<String>,
+    motd: Option<String>,
+    favicon: Option<String>,
+    error: Option<String>,
+}
+
+fn write_varint(mut value: i32, output: &mut Vec<u8>) {
+    loop {
+        if (value & !0x7f) == 0 { output.push(value as u8); return; }
+        output.push(((value & 0x7f) | 0x80) as u8);
+        value = ((value as u32) >> 7) as i32;
+    }
+}
+
+fn read_varint<R: Read>(reader: &mut R) -> io::Result<i32> {
+    let mut result = 0i32;
+    for index in 0..5 {
+        let mut byte = [0u8; 1];
+        reader.read_exact(&mut byte)?;
+        result |= ((byte[0] & 0x7f) as i32) << (7 * index);
+        if byte[0] & 0x80 == 0 { return Ok(result); }
+    }
+    Err(io::Error::new(io::ErrorKind::InvalidData, "VarInt is too large"))
+}
+
+fn write_mc_string(value: &str, output: &mut Vec<u8>) {
+    write_varint(value.len() as i32, output);
+    output.extend_from_slice(value.as_bytes());
+}
+
+fn frame_packet(payload: Vec<u8>) -> Vec<u8> {
+    let mut framed = Vec::new();
+    write_varint(payload.len() as i32, &mut framed);
+    framed.extend(payload);
+    framed
+}
+
+fn component_text(value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Array(items) => items.iter().map(component_text).collect::<Vec<_>>().join(""),
+        Value::Object(map) => {
+            let mut text = map.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            if let Some(extra) = map.get("extra") { text.push_str(&component_text(extra)); }
+            text
+        }
+        _ => String::new(),
+    }
+}
+
+#[tauri::command]
+fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, String> {
+    let host = host.trim().trim_end_matches('.').to_string();
+    if host.is_empty() || host.len() > 253 || host.chars().any(|c| !(c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == ':')) {
+        return Err("Invalid server hostname".to_string());
+    }
+    if port == 0 { return Err("Invalid server port".to_string()); }
+    let offline = |message: String| ServerPingResult {
+        online: false, host: host.clone(), port, latency_ms: None, players_online: None,
+        players_max: None, version: None, motd: None, favicon: None, error: Some(message)
+    };
+    let addresses = match (host.as_str(), port).to_socket_addrs() {
+        Ok(items) => items.collect::<Vec<_>>(),
+        Err(error) => return Ok(offline(format!("DNS lookup failed: {error}"))),
+    };
+    if addresses.is_empty() { return Ok(offline("No server address found".to_string())); }
+    let mut last_error = "Connection failed".to_string();
+    for address in addresses.into_iter().take(8) {
+        let mut stream = match TcpStream::connect_timeout(&address, Duration::from_secs(3)) {
+            Ok(stream) => stream,
+            Err(error) => { last_error = error.to_string(); continue; }
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(3)));
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(3)));
+        let mut handshake = Vec::new();
+        write_varint(0, &mut handshake);
+        write_varint(-1, &mut handshake);
+        write_mc_string(&host, &mut handshake);
+        handshake.extend_from_slice(&port.to_be_bytes());
+        write_varint(1, &mut handshake);
+        if let Err(error) = stream.write_all(&frame_packet(handshake)) { last_error = error.to_string(); continue; }
+        if let Err(error) = stream.write_all(&[1, 0]) { last_error = error.to_string(); continue; }
+        let started = Instant::now();
+        let packet_len = match read_varint(&mut stream) {
+            Ok(length) if length > 0 && length <= 1_048_576 => length as usize,
+            Ok(_) => { last_error = "Invalid status packet length".to_string(); continue; },
+            Err(error) => { last_error = error.to_string(); continue; }
+        };
+        let mut packet = vec![0u8; packet_len];
+        if let Err(error) = stream.read_exact(&mut packet) { last_error = error.to_string(); continue; }
+        let latency = started.elapsed().as_millis();
+        let mut cursor = io::Cursor::new(packet);
+        let packet_id = match read_varint(&mut cursor) { Ok(id) => id, Err(error) => { last_error = error.to_string(); continue; } };
+        if packet_id != 0 { last_error = "Unexpected status packet".to_string(); continue; }
+        let json_len = match read_varint(&mut cursor) { Ok(length) if length >= 0 && length <= 1_000_000 => length as usize, _ => { last_error = "Invalid status JSON length".to_string(); continue; } };
+        let mut json_bytes = vec![0u8; json_len];
+        if let Err(error) = cursor.read_exact(&mut json_bytes) { last_error = error.to_string(); continue; }
+        let status: Value = match serde_json::from_slice(&json_bytes) {
+            Ok(value) => value,
+            Err(error) => { last_error = format!("Invalid status JSON: {error}"); continue; }
+        };
+        let players = status.get("players");
+        let description = status.get("description").map(component_text).filter(|s| !s.is_empty());
+        return Ok(ServerPingResult {
+            online: true, host, port, latency_ms: Some(latency),
+            players_online: players.and_then(|p| p.get("online")).and_then(Value::as_u64).map(|v| v as u32),
+            players_max: players.and_then(|p| p.get("max")).and_then(Value::as_u64).map(|v| v as u32),
+            version: status.pointer("/version/name").and_then(Value::as_str).map(str::to_string),
+            motd: description,
+            favicon: status.get("favicon").and_then(Value::as_str).map(str::to_string),
+            error: None,
+        });
+    }
+    Ok(offline(last_error))
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![get_system_environment, load_launcher_config,
-            save_launcher_config, download_modrinth_file, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft])
+            save_launcher_config, download_modrinth_file, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }

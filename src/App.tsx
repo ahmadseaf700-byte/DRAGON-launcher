@@ -11,6 +11,7 @@ import AccountsPanel from "./components/AccountsPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import ModrinthCatalog from "./components/ModrinthCatalog";
 import KeybindsPanel from "./components/KeybindsPanel";
+import ServersPanel from "./components/ServersPanel";
 
 interface SystemEnv {
   os: string;
@@ -47,13 +48,14 @@ export default function App() {
     { id: "news", label: t.news, icon: Newspaper },
     { id: "accounts", label: t.accounts, icon: UserRound },
     { id: "keybinds", label: lang === "ar" ? "الأزرار" : "Keybinds", icon: Keyboard },
-    { id: "dragonHost", label: t.dragonHost, icon: Server },
+    { id: "servers", label: t.servers, icon: Server },
+    { id: "dragonHost", label: t.dragonHost, icon: Flame },
     { id: "settings", label: t.settings, icon: Settings }
   ], [t]);
 
   const pageDescriptions: Partial<Record<TabType, string>> = {
     versions: t.versionsDescription, mods: t.modsDescription, modpacks: t.packsDescription,
-    news: t.newsDescription, accounts: t.accountDescription, dragonHost: t.hostDescription,
+    news: t.newsDescription, accounts: t.accountDescription, servers: t.serversDescription, dragonHost: t.hostDescription,
     settings: t.settingsDescription
   };
   const currentLabel = navItems.find(item => item.id === activeTab)?.label ?? t.home;
@@ -130,6 +132,8 @@ export default function App() {
             <KeybindsPanel lang={lang} />
           ) : activeTab === "settings" ? (
             <SettingsPanel lang={lang} />
+          ) : activeTab === "servers" ? (
+            <ServersPanel lang={lang} />
           ) : activeTab === "home" ? (
             <div className="home-layout">
               <section className="welcome-card">
@@ -176,7 +180,7 @@ export default function App() {
                   <div className="ram-number">{(ramMB / 1024).toFixed(1)} <small>GB</small></div>
                   <input aria-label={t.ram} type="range" min={1024} max={maxRam} step={512} value={Math.min(ramMB, maxRam)} onChange={e => setRamMB(Number(e.target.value))} />
                   <div className="range-labels"><span>1 GB</span><span>{(maxRam / 1024).toFixed(1)} GB</span></div>
-                  <p className="memory-note">{lang === "ar" ? "هذا اختيار واجهة حالياً؛ لن يُطبّق على تشغيل اللعبة قبل اكتمال محرك التشغيل." : "This is currently a UI preference; it will apply once the game runtime is implemented."}</p>
+                  <p className="memory-note">{lang === "ar" ? "يتم تمرير هذه القيمة إلى أمر تشغيل Java عند بدء اللعبة." : "This value is passed to the Java launch command."}</p>
                 </article>
               </section>
             </div>
