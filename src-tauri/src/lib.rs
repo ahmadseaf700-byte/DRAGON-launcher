@@ -224,6 +224,70 @@ mod java_version_tests {
 }
 
 #[derive(Serialize)]
+struct JavaRuntimeDownload {
+    java_major: u32,
+    vendor: String,
+    package_name: String,
+    download_url: String,
+    checksum_sha256: Option<String>,
+    archive_size: Option<u64>,
+    platform: String,
+}
+
+#[tauri::command]
+async fn get_java_runtime_download(version_id: String) -> Result<JavaRuntimeDownload, String> {
+    if version_id.is_empty() || version_id.len() > 64
+        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err("Invalid Minecraft version identifier".to_string());
+    }
+    let metadata_path = launcher_data_dir()?.join("game").join("versions")
+        .join(&version_id).join(format!("{version_id}.json"));
+    if !metadata_path.is_file() {
+        return Err(format!("Install Minecraft {version_id} first so its Java requirement can be read."));
+    }
+    let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path)
+        .map_err(|e| format!("Could not read Minecraft metadata: {e}"))?)
+        .map_err(|e| format!("Invalid Minecraft metadata: {e}"))?;
+    let major = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64)
+        .ok_or("Minecraft metadata does not declare a Java major version")? as u32;
+    let (os, arch) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => ("windows", "x64"),
+        ("windows", "aarch64") => ("windows", "aarch64"),
+        ("linux", "x86_64") => ("linux", "x64"),
+        ("linux", "aarch64") => ("linux", "aarch64"),
+        ("macos", "x86_64") => ("mac", "x64"),
+        ("macos", "aarch64") => ("mac", "aarch64"),
+        ("android", _) => return Err("Automatic Temurin installation is not enabled on Android. Android needs a separately tested Java runtime and compatibility layer.".to_string()),
+        _ => return Err(format!("No supported Temurin package mapping for {}-{}", std::env::consts::OS, std::env::consts::ARCH)),
+    };
+    let api_url = format!("https://api.adoptium.net/v3/assets/latest/{major}/hotspot");
+    let response = reqwest::Client::new().get(&api_url)
+        .query(&[("architecture", arch), ("heap_size", "normal"), ("image_type", "jre"),
+            ("jvm_impl", "hotspot"), ("os", os), ("page_size", "1"), ("vendor", "eclipse")])
+        .send().await.map_err(|e| format!("Temurin API request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Temurin API returned HTTP {}", response.status()));
+    }
+    let assets: Value = response.json().await.map_err(|e| format!("Invalid Temurin API response: {e}"))?;
+    let asset = assets.as_array().and_then(|a| a.first()).ok_or("No matching Temurin JRE package exists for this platform and Java version")?;
+    let package = asset.pointer("/binary/package").ok_or("Temurin response has no binary package")?;
+    let download_url = package.get("link").and_then(Value::as_str).ok_or("Temurin package has no download link")?;
+    let parsed = reqwest::Url::parse(download_url).map_err(|e| format!("Invalid Temurin download URL: {e}"))?;
+    if parsed.scheme() != "https" || !matches!(parsed.host_str(), Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com")) {
+        return Err("Refusing a Temurin download URL outside the approved HTTPS hosts".to_string());
+    }
+    Ok(JavaRuntimeDownload {
+        java_major: major,
+        vendor: "Eclipse Temurin".to_string(),
+        package_name: package.get("name").and_then(Value::as_str).unwrap_or("Temurin JRE").to_string(),
+        download_url: download_url.to_string(),
+        checksum_sha256: package.get("checksum").and_then(Value::as_str).map(str::to_string),
+        archive_size: package.get("size").and_then(Value::as_u64),
+        platform: format!("{os}-{arch}"),
+    })
+}
+
+#[derive(Serialize)]
 struct JavaRuntimeCheck {
     executable: String,
     version: String,
@@ -1166,7 +1230,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, get_java_runtime_download, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
