@@ -2,7 +2,7 @@ export type Language = "ar" | "en";
 
 export const translations = {
   ar: {
-    appName: "قاذفة دراكون",
+    appName: "دراغون لانشر",
     subtitle: "كل عوالم Minecraft في مكان واحد",
     home: "الرئيسية",
     versions: "الإصدارات",
@@ -28,7 +28,7 @@ export const translations = {
     switchLanguage: "English",
     accountNotice: "لم يتم تسجيل الدخول بعد",
     accountDescription: "ستتم إضافة Microsoft والحسابات المحلية في المرحلة الثانية.",
-    versionsDescription: "سيظهر هنا كتالوج إصدارات Minecraft الرسمي.",
+    versionsDescription: "كتالوج الإصدارات الرسمي متصل الآن بخوادم Mojang ويمكنك البحث وتحديد إصدار.",
     modsDescription: "إدارة المودات ستتوفر بعد إضافة محرك اللعبة.",
     packsDescription: "تثبيت حزم Modrinth سيُضاف في مرحلة التكاملات.",
     newsDescription: "الأخبار الرسمية ستُجلب من مصدرها عند تنفيذ التكامل.",
@@ -64,7 +64,7 @@ export const translations = {
     switchLanguage: "العربية",
     accountNotice: "Not signed in",
     accountDescription: "Microsoft and local accounts will be implemented in phase 2.",
-    versionsDescription: "The official Minecraft version catalog will appear here.",
+    versionsDescription: "The official Mojang version catalog is live; search and select a version.",
     modsDescription: "Mod management will be available after the game engine is added.",
     packsDescription: "Modrinth modpack installation will be added in the integrations phase.",
     newsDescription: "Official news will be fetched from its source when integration is implemented.",
