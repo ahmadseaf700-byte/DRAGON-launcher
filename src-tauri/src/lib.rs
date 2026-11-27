@@ -467,21 +467,8 @@ fn launch_minecraft(
             return Err(format!("هذا الإصدار يحتاج Java {required} أو أحدث، بينما المثبّت هو Java {java_major}."));
         }
     }
-    let game_dir = if let Some(id) = instance_id {
-        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
-            return Err("Invalid instance identifier".to_string());
-        }
-        let instance_dir = launcher_data_dir()?.join("instances").join(&id);
-        let metadata: Value = serde_json::from_slice(&fs::read(instance_dir.join("instance.json"))
-            .map_err(|_| "النسخة المحددة لم تعد موجودة. حدّث قائمة النسخ.".to_string())?)
-            .map_err(|e| format!("Invalid instance metadata: {e}"))?;
-        if metadata.get("id").and_then(Value::as_str) != Some(id.as_str()) {
-            return Err("Instance identity verification failed".to_string());
-        }
-        if metadata.get("version_id").and_then(Value::as_str) != Some(version_id.as_str()) {
-            return Err("إصدار النسخة المحددة لا يطابق إصدار التشغيل.".to_string());
-        }
-        instance_dir
+    let game_dir = if let Some(id) = instance_id.as_deref() {
+        instance_directory(id, Some(&version_id))?
     } else {
         config.get("game_directory").and_then(Value::as_str)
             .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| root.clone())
@@ -729,8 +716,29 @@ fn save_launcher_config(app: tauri::AppHandle, config: Value) -> Result<(), Stri
     Ok(())
 }
 
+fn instance_directory(instance_id: &str, expected_version: Option<&str>) -> Result<PathBuf, String> {
+    if instance_id.is_empty() || instance_id.len() > 100
+        || !instance_id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+        return Err("Invalid instance identifier".to_string());
+    }
+    let instance_dir = launcher_data_dir()?.join("instances").join(instance_id);
+    let metadata: Value = serde_json::from_slice(
+        &fs::read(instance_dir.join("instance.json"))
+            .map_err(|_| "النسخة المحددة غير موجودة. حدّث قائمة النسخ.".to_string())?
+    ).map_err(|e| format!("Invalid instance metadata: {e}"))?;
+    if metadata.get("id").and_then(Value::as_str) != Some(instance_id) {
+        return Err("Instance identity verification failed".to_string());
+    }
+    if let Some(version) = expected_version {
+        if metadata.get("version_id").and_then(Value::as_str) != Some(version) {
+            return Err("إصدار النسخة المحددة لا يطابق إصدار التشغيل.".to_string());
+        }
+    }
+    Ok(instance_dir)
+}
+
 #[tauri::command]
-async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String) -> Result<String, String> {
+async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String, instance_id: Option<String>) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid download URL: {e}"))?;
     if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
         return Err("Downloads are only allowed from the official Modrinth CDN over HTTPS".to_string());
@@ -764,8 +772,16 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     let data_dir = launcher_data_dir()?;
     let config_path = config_file(&app)?;
     let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
-    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let base = if kind == "mod" { game_dir.join(folder) } else { data_dir.join(folder) };
+    let game_dir = if kind == "mod" {
+        if let Some(id) = instance_id.as_deref() {
+            instance_directory(id, None)?
+        } else {
+            config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"))
+        }
+    } else {
+        data_dir.clone()
+    };
+    let base = game_dir.join(folder);
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let mut destination = base.join(&filename);
     if destination.exists() {
@@ -792,7 +808,7 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
 
 
 #[tauri::command]
-fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String) -> Result<String, String> {
+fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String, instance_id: Option<String>) -> Result<String, String> {
     if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".jar")
         || filename.contains('/') || filename.contains('\\')
         || filename == "." || filename == ".." {
@@ -808,7 +824,11 @@ fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: Str
     let data_dir = launcher_data_dir()?;
     let config_path = config_file(&app)?;
     let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
-    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
+    let game_dir = if let Some(id) = instance_id.as_deref() {
+        instance_directory(id, None)?
+    } else {
+        config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"))
+    };
     let mods_dir = game_dir.join("mods");
     fs::create_dir_all(&mods_dir).map_err(|e| format!("Could not create mods folder: {e}"))?;
     let mut destination = mods_dir.join(&filename);
