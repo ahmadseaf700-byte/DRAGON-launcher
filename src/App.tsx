@@ -5,7 +5,7 @@ import {
   Layers3, Newspaper, Play, Server, Settings, UserRound, type LucideIcon
 } from "lucide-react";
 import { useLauncherStore, type TabType } from "./store/useLauncherStore";
-import { translations } from "./locales/translations";
+import { translations } from "./locales/translations";\nimport VersionCatalog from "./components/VersionCatalog";
 
 interface SystemEnv {
   os: string;
@@ -15,7 +15,7 @@ interface SystemEnv {
 }
 
 export default function App() {
-  const { lang, setLang, activeTab, setActiveTab, ramMB, setRamMB } = useLauncherStore();
+  const { lang, setLang, activeTab, setActiveTab, ramMB, setRamMB, selectedVersion, setSelectedVersion } = useLauncherStore();
   const t = translations[lang];
   const [system, setSystem] = useState<SystemEnv | null>(null);
   const [systemError, setSystemError] = useState(false);
@@ -56,7 +56,7 @@ export default function App() {
     settings: t.settingsDescription
   };
 
-  const handlePlay = () => setPlayMessage(t.preparing);
+  const handlePlay = () => setPlayMessage(t.notInstalled);
   const maxRam = system ? Math.max(1024, Math.min(16384, system.total_ram_mb - 1024)) : 8192;
 
   return (
@@ -99,7 +99,7 @@ export default function App() {
           </button>
         </header>
 
-        {activeTab === "home" ? (
+        {activeTab === "versions" ? (\n          <VersionCatalog lang={lang} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />\n        ) : activeTab === "home" ? (
           <>
             <section className="relative overflow-hidden rounded-3xl border border-dragon-border bg-gradient-to-br from-dragon-card via-[#171827] to-[#301321] p-6 shadow-glow sm:p-9">
               <div className="pointer-events-none absolute -end-12 -top-20 h-64 w-64 rounded-full bg-rose-600/10 blur-3xl" />
@@ -109,7 +109,7 @@ export default function App() {
                 <p className="mt-3 max-w-lg text-sm leading-7 text-slate-300">{t.subtitle}</p>
                 <div className="mt-6 flex flex-wrap gap-3">
                   <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3"><p className="text-xs text-slate-400">{t.status}</p><p className="mt-1 text-sm font-bold text-amber-300">{t.notInstalled}</p></div>
-                  <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3"><p className="text-xs text-slate-400">{t.selectedVersion}</p><p className="mt-1 text-sm font-bold">—</p></div>
+                  <div className="rounded-xl border border-white/10 bg-black/20 px-4 py-3"><p className="text-xs text-slate-400">{t.selectedVersion}</p><p className="mt-1 text-sm font-bold">{selectedVersion ?? "—"}</p></div>
                 </div>
               </div>
             </section>
@@ -150,7 +150,7 @@ export default function App() {
         <footer className="mt-auto rounded-2xl border border-dragon-border bg-dragon-panel p-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div className="min-w-0"><p className="text-xs text-slate-400">{playMessage}</p><p className="mt-1 text-sm font-bold">Minecraft Java Edition</p></div>
-            <button onClick={handlePlay} className="flex items-center gap-2 rounded-xl bg-dragon-accent px-6 py-3 font-bold shadow-glow transition hover:bg-rose-600 active:scale-95">
+            <button onClick={handlePlay} disabled className="flex items-center gap-2 rounded-xl bg-dragon-accent px-6 py-3 font-bold shadow-glow transition hover:bg-rose-600 active:scale-95 disabled:cursor-not-allowed disabled:opacity-50" title={t.notInstalled}>
               <Play size={18} fill="currentColor" />{t.play}
             </button>
           </div>
