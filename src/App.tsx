@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   Blocks, Box, Cpu, Download, Flame, Gamepad2, Globe2, Home,
-  Layers3, Newspaper, Play, Server, Settings, UserRound, type LucideIcon
+  Layers3, Newspaper, Play, Server, Settings, UserRound, Keyboard, type LucideIcon
 } from "lucide-react";
 import { useLauncherStore, type TabType } from "./store/useLauncherStore";
 import { translations } from "./locales/translations";
@@ -10,6 +10,7 @@ import VersionCatalog from "./components/VersionCatalog";
 import AccountsPanel from "./components/AccountsPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import ModrinthCatalog from "./components/ModrinthCatalog";
+import KeybindsPanel from "./components/KeybindsPanel";
 
 interface SystemEnv {
   os: string;
@@ -42,6 +43,7 @@ export default function App() {
     { id: "modpacks", label: t.modpacks, icon: Box },
     { id: "news", label: t.news, icon: Newspaper },
     { id: "accounts", label: t.accounts, icon: UserRound },
+    { id: "keybinds", label: lang === "ar" ? "الأزرار" : "Keybinds", icon: Keyboard },
     { id: "dragonHost", label: t.dragonHost, icon: Server },
     { id: "settings", label: t.settings, icon: Settings }
   ], [t]);
