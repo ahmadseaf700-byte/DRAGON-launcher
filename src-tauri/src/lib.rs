@@ -136,7 +136,7 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
 
     let libraries = metadata.get("libraries").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut installed_libraries = 0usize;
-    for library in libraries.iter().filter(|l| library_allowed(library)) {
+    for library in libraries.iter().filter(|library| library_allowed(library)) {
         // Native classifiers are platform-specific archives; launcher runtime extraction is a separate stage.
         if let Some(artifact) = library.pointer("/downloads/artifact") {
             if let (Some(url), Some(path)) = (artifact.get("url").and_then(Value::as_str), artifact.get("path").and_then(Value::as_str)) {
