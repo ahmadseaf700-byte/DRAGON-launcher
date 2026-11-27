@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::{fs, io, path::{Path, PathBuf}};
+use std::{fs, io, path::{Path, PathBuf}, process::{Command, Stdio}};
 use sysinfo::System;
 use tauri::{Emitter, Manager};
 use zip::ZipArchive;
