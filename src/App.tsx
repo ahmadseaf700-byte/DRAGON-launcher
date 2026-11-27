@@ -36,6 +36,7 @@ export default function App() {
   const [launchMessage, setLaunchMessage] = useState("");
   const [launchError, setLaunchError] = useState("");
   const [versionInstalled, setVersionInstalled] = useState(false);
+  const [javaCompatibility, setJavaCompatibility] = useState<string>("");
   const [checkingVersion, setCheckingVersion] = useState(false);
   const [activeGamePid, setActiveGamePid] = useState<number | null>(null);
   const [selectedInstance, setSelectedInstance] = useState<GameInstance | null>(() => { try { const raw = localStorage.getItem("dragon.activeInstance"); return raw ? JSON.parse(raw) as GameInstance : null; } catch { return null; } });
@@ -53,6 +54,16 @@ export default function App() {
     invoke<SystemEnv>("get_system_environment").then(setSystem).catch(() => setSystemError(true));
   }, [native]);
 
+
+  useEffect(() => {
+    let cancelled = false;
+    setJavaCompatibility("");
+    if (!native || !effectiveVersion || !versionInstalled) return;
+    invoke<{ compatible: boolean; message: string }>("check_java_compatibility", { versionId: effectiveVersion })
+      .then(result => { if (!cancelled) setJavaCompatibility(result.message); })
+      .catch(error => { if (!cancelled) setJavaCompatibility(String(error)); });
+    return () => { cancelled = true; };
+  }, [native, effectiveVersion, versionInstalled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -243,6 +254,7 @@ export default function App() {
                       <div><dt>{t.architecture}</dt><dd>{system.arch}</dd></div>
                       <div><dt>{lang === "ar" ? "هدف التشغيل" : "Runtime target"}</dt><dd>{system.runtime_target}</dd></div>
                       <div><dt>{lang === "ar" ? "Java Runtime" : "Java Runtime"}</dt><dd>{system.java_detected ? (system.java_version || (lang === "ar" ? "تم العثور عليها" : "Detected")) : (lang === "ar" ? "غير مكتشفة" : "Not detected")}</dd></div>
+                      {javaCompatibility && <div className="directory-row"><dt>{lang === "ar" ? "توافق Java" : "Java compatibility"}</dt><dd>{javaCompatibility}</dd></div>}
                       {system.java_path && <div className="directory-row"><dt>{lang === "ar" ? "مسار Java" : "Java path"}</dt><dd>{system.java_path}</dd></div>}
                       <div><dt>{t.totalMemory}</dt><dd>{Math.round(system.total_ram_mb / 1024)} GB</dd></div>
                       <div className="directory-row"><dt>{t.dataDirectory}</dt><dd>{system.launcher_dir}</dd></div>
