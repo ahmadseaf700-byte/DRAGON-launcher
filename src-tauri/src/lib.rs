@@ -499,8 +499,11 @@ fn import_external_mod(filename: String, data_base64: String) -> Result<String, 
 }
 
 #[tauri::command]
-fn read_game_log() -> Result<String, String> {
-    let game_dir = launcher_data_dir()?.join("game");
+fn read_game_log(app: tauri::AppHandle) -> Result<String, String> {
+    let root = launcher_data_dir()?.join("game");
+    let config_path = config_file(&app)?;
+    let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
+    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or(root);
     let mut combined = String::new();
     for (label, path) in [
         ("Minecraft latest.log", game_dir.join("logs").join("latest.log")),
