@@ -182,6 +182,61 @@ fn extract_native_archive(archive_path: &Path, destination: &Path, excludes: &[S
     Ok(())
 }
 
+#[derive(Serialize)]
+struct JavaCompatibility {
+    version_id: String,
+    required_major: Option<u32>,
+    detected_major: Option<u32>,
+    java_detected: bool,
+    compatible: bool,
+    java_path: Option<String>,
+    message: String,
+}
+
+fn parse_java_major(raw: &str) -> Option<u32> {
+    let start = raw.find('"').map(|i| i + 1).unwrap_or(0);
+    let value = raw[start..].split(|c: char| !(c.is_ascii_digit() || c == '.')).next()?;
+    let mut parts = value.split('.');
+    let first = parts.next()?.parse::<u32>().ok()?;
+    if first == 1 { parts.next()?.parse::<u32>().ok() } else { Some(first) }
+}
+
+#[tauri::command]
+fn check_java_compatibility(version_id: String) -> Result<JavaCompatibility, String> {
+    if version_id.is_empty() || version_id.len() > 64
+        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err("Invalid Minecraft version identifier".to_string());
+    }
+    let metadata_path = launcher_data_dir()?.join("game").join("versions")
+        .join(&version_id).join(format!("{version_id}.json"));
+    if !metadata_path.is_file() {
+        return Err(format!("Minecraft metadata for {version_id} is not installed yet"));
+    }
+    let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path)
+        .map_err(|e| format!("Could not read Minecraft metadata: {e}"))?)
+        .map_err(|e| format!("Invalid Minecraft metadata: {e}"))?;
+    let required_major = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64).map(|v| v as u32);
+    let (java_detected, java_version, java_path) = detect_java_runtime();
+    let detected_major = java_version.as_deref().and_then(parse_java_major);
+    let compatible = match (required_major, detected_major) {
+        (Some(required), Some(detected)) => detected >= required,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let message = if !java_detected {
+        "No runnable Java installation was found in JAVA_HOME or PATH".to_string()
+    } else if let (Some(required), Some(detected)) = (required_major, detected_major) {
+        if detected >= required { format!("Java {detected} satisfies the Minecraft requirement (Java {required}+)") }
+        else { format!("Java {detected} is too old; Minecraft requires Java {required}+") }
+    } else if required_major.is_none() {
+        "Java was detected; this Minecraft version does not declare a Java major requirement".to_string()
+    } else {
+        "Java was detected, but its major version could not be parsed".to_string()
+    };
+    Ok(JavaCompatibility { version_id, required_major, detected_major, java_detected, compatible,
+        java_path, message })
+}
+
 #[tauri::command]
 fn is_minecraft_version_installed(version_id: String) -> Result<bool, String> {
     if version_id.is_empty() || version_id.len() > 64
@@ -1018,7 +1073,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
