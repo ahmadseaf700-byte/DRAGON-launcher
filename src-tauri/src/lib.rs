@@ -224,7 +224,8 @@ async fn download_modrinth_file(_app: tauri::AppHandle, url: String, filename: S
     if !response.status().is_success() { return Err(format!("Modrinth CDN returned HTTP {}", response.status())); }
     let bytes = response.bytes().await.map_err(|e| e.to_string())?;
     if bytes.is_empty() { return Err("The downloaded file is empty".to_string()); }
-    let base = launcher_data_dir()?.join(folder);
+    let data_dir = launcher_data_dir()?;
+    let base = if kind == "mod" { data_dir.join("game").join(folder) } else { data_dir.join(folder) };
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let destination = base.join(&filename);
     fs::write(&destination, &bytes).map_err(|e| e.to_string())?;
