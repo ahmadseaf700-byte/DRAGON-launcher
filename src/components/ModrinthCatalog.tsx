@@ -7,7 +7,7 @@ type Hit = { project_id: string; slug: string; title: string; description: strin
 type SearchResponse = { hits: Hit[]; total_hits?: number; offset?: number; limit?: number };
 type ProjectVersion = { name: string; version_number: string; files: { url: string; filename: string; primary?: boolean }[] };
 
-export default function ModrinthCatalog({ lang, kind }: { lang: Language; kind: "mod" | "modpack" }) {
+export default function ModrinthCatalog({ lang, kind, instanceId }: { lang: Language; kind: "mod" | "modpack"; instanceId: string | null }) {
   const ar = lang === "ar";
   const native = isTauri();
   const [query, setQuery] = useState("");
@@ -60,7 +60,7 @@ export default function ModrinthCatalog({ lang, kind }: { lang: Language; kind: 
       const selected = versions.find(v => v.files?.some(f => f.primary)) ?? versions.find(v => v.files?.length);
       const file = selected?.files?.find(f => f.primary) ?? selected?.files?.[0];
       if (!file) throw new Error(ar ? "لا يوجد ملف متوافق لهذا الإصدار والمشغل." : "No compatible file was found for this game version and loader.");
-      const path = await invoke<string>("download_modrinth_file", { url: file.url, filename: file.filename, kind });
+      const path = await invoke<string>("download_modrinth_file", { url: file.url, filename: file.filename, kind, instanceId });
       setNotice((ar ? "تم الحفظ في: " : "Saved to: ") + path);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusyId(""); }
@@ -79,7 +79,7 @@ export default function ModrinthCatalog({ lang, kind }: { lang: Language; kind: 
       const chunk = 0x8000;
       for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
       const dataBase64 = btoa(binary);
-      const path = await invoke<string>("import_external_mod", { filename: file.name, dataBase64 });
+      const path = await invoke<string>("import_external_mod", { filename: file.name, dataBase64, instanceId });
       setNotice((ar ? "تم استيراد المود إلى: " : "Imported mod to: ") + path);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
     finally { setBusyId(""); }
