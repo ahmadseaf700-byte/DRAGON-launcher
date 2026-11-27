@@ -19,7 +19,10 @@ export default function SettingsPanel({ lang }: { lang: Language }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [javaCheck, setJavaCheck] = useState("");
-  const [checkingJava, setCheckingJava] = useState(false);\n  const [runtimeInfo, setRuntimeInfo] = useState<{ java_major: number; vendor: string; package_name: string; download_url: string; checksum_sha256: string | null; archive_size: number | null; platform: string } | null>(null);\n  const [runtimeError, setRuntimeError] = useState("");\n  const [loadingRuntime, setLoadingRuntime] = useState(false);
+  const [checkingJava, setCheckingJava] = useState(false);
+  const [runtimeInfo, setRuntimeInfo] = useState<{ java_major: number; vendor: string; package_name: string; download_url: string; checksum_sha256: string | null; archive_size: number | null; platform: string } | null>(null);
+  const [runtimeError, setRuntimeError] = useState("");
+  const [loadingRuntime, setLoadingRuntime] = useState(false);
   const [downloadingRuntime, setDownloadingRuntime] = useState(false);
   const [runtimeDownloadResult, setRuntimeDownloadResult] = useState("");
   const [runtimeArchivePath, setRuntimeArchivePath] = useState("");
@@ -99,7 +102,8 @@ export default function SettingsPanel({ lang }: { lang: Language }) {
         javaMajor: runtimeInfo.java_major,
         platform: runtimeInfo.platform
       });
-      setRuntimeArchivePath(result.archive_path);\n      setRuntimeDownloadResult((ar ? "تم تنزيل الأرشيف والتحقق من SHA-256: " : "Archive downloaded and SHA-256 verified: ") + result.archive_path);
+      setRuntimeArchivePath(result.archive_path);
+      setRuntimeDownloadResult((ar ? "تم تنزيل الأرشيف والتحقق من SHA-256: " : "Archive downloaded and SHA-256 verified: ") + result.archive_path);
     } catch (error) { setRuntimeError(String(error)); }
     finally { setDownloadingRuntime(false); }
   };
