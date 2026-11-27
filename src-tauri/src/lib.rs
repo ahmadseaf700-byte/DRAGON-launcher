@@ -202,7 +202,7 @@ fn parse_java_major(raw: &str) -> Option<u32> {
 }
 
 #[tauri::command]
-fn check_java_compatibility(version_id: String) -> Result<JavaCompatibility, String> {
+fn check_java_compatibility(app: tauri::AppHandle, version_id: String) -> Result<JavaCompatibility, String> {
     if version_id.is_empty() || version_id.len() > 64
         || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
@@ -216,7 +216,30 @@ fn check_java_compatibility(version_id: String) -> Result<JavaCompatibility, Str
         .map_err(|e| format!("Could not read Minecraft metadata: {e}"))?)
         .map_err(|e| format!("Invalid Minecraft metadata: {e}"))?;
     let required_major = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64).map(|v| v as u32);
-    let (java_detected, java_version, java_path) = detect_java_runtime();
+    let config_path = config_file(&app)?;
+    let config: Value = if config_path.is_file() {
+        serde_json::from_slice(&fs::read(&config_path).map_err(|e| format!("Could not read launcher config: {e}"))?)
+            .map_err(|e| format!("Invalid launcher config: {e}"))?
+    } else { json!({}) };
+    let configured_java = config.get("java_path").and_then(Value::as_str)
+        .map(str::trim).filter(|path| !path.is_empty());
+    let (java_detected, java_version, java_path) = if let Some(path) = configured_java {
+        let candidate = PathBuf::from(path);
+        if !candidate.is_file() {
+            return Err(format!("Configured Java executable does not exist: {path}"));
+        }
+        let output = Command::new(&candidate).arg("-version").output()
+            .map_err(|e| format!("Could not run configured Java executable: {e}"))?;
+        if !output.status.success() {
+            return Err(format!("Configured Java failed: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+        let text = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+        let version = text.lines().find(|line| line.contains("version"))
+            .map(|line| line.trim().to_string());
+        (true, version, Some(candidate.to_string_lossy().into_owned()))
+    } else {
+        detect_java_runtime()
+    };
     let detected_major = java_version.as_deref().and_then(parse_java_major);
     let compatible = match (required_major, detected_major) {
         (Some(required), Some(detected)) => detected >= required,
