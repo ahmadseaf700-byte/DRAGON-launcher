@@ -635,6 +635,48 @@ fn delete_game_instance(instance_id: String) -> Result<(), String> {
     fs::remove_dir_all(target).map_err(|e| format!("Could not delete instance: {e}"))
 }
 
+
+#[tauri::command]
+fn rename_game_instance(instance_id: String, name: String) -> Result<Value, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 40 || name.chars().any(|c| c.is_control()) {
+        return Err("اسم النسخة يجب أن يكون بين 1 و40 حرفاً.".to_string());
+    }
+    let root = launcher_data_dir()?.join("instances");
+    let target = root.join(&instance_id);
+    if !target.join("instance.json").is_file() { return Err("النسخة المطلوبة غير موجودة.".to_string()); }
+    let mut value: Value = serde_json::from_slice(&fs::read(target.join("instance.json")).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    if value.get("id").and_then(Value::as_str) != Some(instance_id.as_str()) {
+        return Err("Instance identity verification failed".to_string());
+    }
+    value["name"] = Value::String(name.to_string());
+    let temp = target.join("instance.json.tmp");
+    fs::write(&temp, serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    fs::rename(temp, target.join("instance.json")).map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
+#[tauri::command]
+fn open_instance_folder(instance_id: String, folder: String) -> Result<(), String> {
+    let allowed = ["", "mods", "config", "resourcepacks", "shaderpacks", "saves", "screenshots", "logs", "crash-reports"];
+    if !allowed.contains(&folder.as_str()) { return Err("Invalid instance folder".to_string()); }
+    let target = launcher_data_dir()?.join("instances").join(&instance_id);
+    if !target.join("instance.json").is_file() { return Err("النسخة المطلوبة غير موجودة.".to_string()); }
+    let path = if folder.is_empty() { target } else { target.join(folder) };
+    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    let result = Command::new("explorer").arg(&path).spawn();
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    let result = Command::new("xdg-open").arg(&path).spawn();
+    #[cfg(target_os = "android")]
+    return Err("فتح مجلدات النسخ من واجهة Android غير متاح في هذا البناء.".to_string());
+    #[cfg(not(target_os = "android"))]
+    result.map(|_| ()).map_err(|e| format!("تعذر فتح المجلد: {e}"))
+}
+
 #[tauri::command]
 fn get_system_environment() -> Result<SystemEnvironment, String> {
     let mut system = System::new();
@@ -921,7 +963,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, list_game_instances, create_game_instance, delete_game_instance, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }

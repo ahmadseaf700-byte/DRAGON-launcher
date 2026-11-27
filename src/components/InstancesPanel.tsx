@@ -38,7 +38,7 @@ export default function InstancesPanel({ lang }: { lang: Language }) {
     finally { setBusy(""); }
   };
 
-  const remove = async (item: GameInstance) => {
+  const rename = async (item: GameInstance) => {\n    const next = window.prompt(ar ? "الاسم الجديد للنسخة" : "New instance name", item.name);\n    if (next === null || !next.trim()) return;\n    setBusy(item.id); setError(""); setNotice("");\n    try { const updated = await invoke<GameInstance>("rename_game_instance", { instanceId: item.id, name: next.trim() }); setItems(current => current.map(entry => entry.id === item.id ? updated : entry)); setNotice(ar ? "تم تغيير اسم النسخة." : "Instance renamed."); }\n    catch (e) { setError(String(e)); } finally { setBusy(""); }\n  };\n\n  const openFolder = async (item: GameInstance, folder: string) => {\n    setError(""); try { await invoke("open_instance_folder", { instanceId: item.id, folder }); } catch (e) { setError(String(e)); }\n  };\n\n  const remove = async (item: GameInstance) => {
     if (!window.confirm(ar ? `حذف النسخة «${item.name}» وجميع ملفاتها؟` : `Delete "${item.name}" and all its files?`)) return;
     setBusy(item.id); setError(""); setNotice("");
     try {
@@ -66,7 +66,7 @@ export default function InstancesPanel({ lang }: { lang: Language }) {
     <div className="mt-5 space-y-3">
       {items.map(item => <article key={item.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-dragon-border bg-dragon-dark p-4">
         <div className="flex min-w-0 items-center gap-3"><span className="rounded-lg bg-dragon-accent/10 p-3 text-dragon-accent"><Gamepad2 size={21}/></span><div className="min-w-0"><h4 className="font-bold">{item.name}</h4><p className="text-sm text-slate-400">{item.version_id}</p><p className="mt-1 break-all text-xs text-slate-500">{item.game_directory}</p></div></div>
-        <button onClick={() => void remove(item)} disabled={busy !== ""} className="flex items-center gap-2 rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-300 disabled:opacity-50"><Trash2 size={15}/>{busy === item.id ? (ar ? "جارٍ الحذف..." : "Deleting...") : (ar ? "حذف" : "Delete")}</button>
+        <div className="flex flex-wrap gap-2"><button onClick={() => void openFolder(item, "")} disabled={busy !== ""} className="flex items-center gap-2 rounded-lg border border-dragon-border px-3 py-2 text-sm"><FolderOpen size={15}/>{ar ? "فتح المجلد" : "Open folder"}</button><button onClick={() => void rename(item)} disabled={busy !== ""} className="rounded-lg border border-dragon-border px-3 py-2 text-sm">{ar ? "إعادة تسمية" : "Rename"}</button><button onClick={() => void remove(item)} disabled={busy !== ""} className="flex items-center gap-2 rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-300 disabled:opacity-50"><Trash2 size={15}/>{busy === item.id ? (ar ? "جارٍ الحذف..." : "Deleting...") : (ar ? "حذف" : "Delete")}</button>
       </article>)}
       {!loading && items.length === 0 && <div className="rounded-xl border border-dashed border-dragon-border p-8 text-center text-sm text-slate-400">{ar ? "لا توجد نسخ بعد. أنشئ أول نسخة من الأعلى." : "No instances yet. Create your first one above."}</div>}
     </div>
