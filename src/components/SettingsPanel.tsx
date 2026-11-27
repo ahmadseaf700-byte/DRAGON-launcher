@@ -10,7 +10,7 @@ const defaults: LauncherConfig = { ram_mb: 4096, game_directory: "", java_path: 
 
 export default function SettingsPanel({ lang }: { lang: Language }) {
   const ar = lang === "ar";
-  const { ramMB, setRamMB, setActiveTab } = useLauncherStore();
+  const { ramMB, setRamMB, setActiveTab, selectedVersion } = useLauncherStore();
   const [section, setSection] = useState<"general" | "log">("general");
   const [gameLog, setGameLog] = useState("");
   const [logError, setLogError] = useState("");
@@ -19,7 +19,7 @@ export default function SettingsPanel({ lang }: { lang: Language }) {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [javaCheck, setJavaCheck] = useState("");
-  const [checkingJava, setCheckingJava] = useState(false);
+  const [checkingJava, setCheckingJava] = useState(false);\n  const [runtimeInfo, setRuntimeInfo] = useState<{ java_major: number; vendor: string; package_name: string; download_url: string; checksum_sha256: string | null; archive_size: number | null; platform: string } | null>(null);\n  const [runtimeError, setRuntimeError] = useState("");\n  const [loadingRuntime, setLoadingRuntime] = useState(false);
   const native = isTauri();
 
   useEffect(() => {
@@ -72,6 +72,17 @@ export default function SettingsPanel({ lang }: { lang: Language }) {
     }
   };
 
+  const findJavaRuntime = async () => {
+    if (!native) { setRuntimeError(ar ? "يتوفر البحث عن حزمة Java داخل التطبيق المثبّت." : "Runtime lookup is available in the installed app."); return; }
+    if (!selectedVersion) { setRuntimeError(ar ? "اختر إصدار Minecraft أولاً من قسم الإصدارات." : "Select a Minecraft version in the Versions section first."); return; }
+    setLoadingRuntime(true); setRuntimeError(""); setRuntimeInfo(null);
+    try {
+      const result = await invoke<NonNullable<typeof runtimeInfo>>("get_java_runtime_download", { versionId: selectedVersion });
+      setRuntimeInfo(result);
+    } catch (error) { setRuntimeError(String(error)); }
+    finally { setLoadingRuntime(false); }
+  };
+
   const refreshLog = async () => {
     if (!native) { setLogError(ar ? "سجل Minecraft يتوفر داخل التطبيق بعد تشغيل اللعبة." : "Minecraft logs are available in the installed app after the game has run."); return; }
     setLoadingLog(true); setLogError("");
@@ -86,7 +97,7 @@ export default function SettingsPanel({ lang }: { lang: Language }) {
     {section === "log" ? <div className="settings-group"><div className="settings-label"><strong>{ar ? "سجل Minecraft — latest.log" : "Minecraft output — latest.log"}</strong><button className="account-select" onClick={() => void refreshLog()} disabled={loadingLog}><RefreshCw size={14}/>{loadingLog ? "…" : (ar ? "تحديث" : "Refresh")}</button></div>{logError && <p className="feature-error">{logError}</p>}<pre className="game-log-view">{gameLog || (ar ? "لا يوجد سجل بعد. شغّل اللعبة أولاً ثم اضغط تحديث." : "No log yet. Run the game first, then refresh.")}</pre></div> : <>
     <div className="settings-group"><div className="settings-label"><strong>{ar ? "تخصيص الذاكرة RAM" : "RAM allocation"}</strong><b>{(ramMB / 1024).toFixed(1)} GB</b></div><input type="range" min="1024" max="12288" step="512" value={ramMB} onChange={e => setRamMB(Number(e.target.value))} /><div className="range-labels"><span>1 GB</span><span>12 GB</span></div><p className="feature-footnote">{ar ? "سيتم تطبيق حد الذاكرة عند تشغيل Minecraft من زر اللعب." : "The selected memory limit is applied to Minecraft JVM arguments when you launch the game."}</p></div>
     <div className="settings-group"><label>{ar ? "مجلد تثبيت اللعبة" : "Game installation directory"}</label><input className="feature-input" value={config.game_directory} onChange={e => update({ game_directory: e.target.value })} placeholder={ar ? "اتركه فارغاً لاستخدام المجلد الافتراضي" : "Leave empty to use the default directory"} /><p className="feature-footnote">{ar ? "أدخل مساراً موجوداً على الجهاز. اختيار المجلد من نافذة النظام سيضاف لاحقاً." : "Enter an existing device path. Native folder picker integration is not added yet."}</p></div>
-    <div className="settings-two"><div className="settings-group"><label>{ar ? "مسار Java" : "Java executable path"}</label><input className="feature-input" value={config.java_path} onChange={e => { update({ java_path: e.target.value }); setJavaCheck(""); }} placeholder="java / path/to/java" /><div className="settings-actions"><button onClick={() => void testJava()} disabled={checkingJava}><RefreshCw size={15}/>{checkingJava ? (ar ? "جارٍ الفحص..." : "Checking...") : (ar ? "اختبار Java" : "Test Java")}</button>{javaCheck && <span className="settings-message">{javaCheck}</span>}</div><p className="feature-footnote">{ar ? "اترك الحقل فارغاً لاستخدام Java المكتشفة في النظام." : "Leave empty to use Java detected from the system PATH."}</p></div><div className="settings-group"><label>{ar ? "عرض نافذة اللعبة" : "Game window width"}</label><input className="feature-input" type="number" min="640" max="7680" value={config.window_width} onChange={e => update({ window_width: Math.max(640, Number(e.target.value)) })} /></div><div className="settings-group"><label>{ar ? "ارتفاع نافذة اللعبة" : "Game window height"}</label><input className="feature-input" type="number" min="480" max="4320" value={config.window_height} onChange={e => update({ window_height: Math.max(480, Number(e.target.value)) })} /></div></div>
+    <div className="settings-two"><div className="settings-group"><label>{ar ? "مسار Java" : "Java executable path"}</label><input className="feature-input" value={config.java_path} onChange={e => { update({ java_path: e.target.value }); setJavaCheck(""); }} placeholder="java / path/to/java" /><div className="settings-actions"><button onClick={() => void testJava()} disabled={checkingJava}><RefreshCw size={15}/>{checkingJava ? (ar ? "جارٍ الفحص..." : "Checking...") : (ar ? "اختبار Java" : "Test Java")}</button>{javaCheck && <span className="settings-message">{javaCheck}</span>}</div><p className="feature-footnote">{ar ? "اترك الحقل فارغاً لاستخدام Java المكتشفة في النظام." : "Leave empty to use Java detected from the system PATH."}</p><div className="settings-actions"><button onClick={() => void findJavaRuntime()} disabled={loadingRuntime}><RefreshCw size={15}/>{loadingRuntime ? (ar ? "جارٍ البحث..." : "Looking up...") : (ar ? "العثور على Java المناسبة" : "Find matching Java")}</button></div>{runtimeError && <p className="feature-error">{runtimeError}</p>}{runtimeInfo && <div className="settings-group"><strong>{runtimeInfo.vendor} {runtimeInfo.java_major} — {runtimeInfo.platform}</strong><p className="feature-footnote">{runtimeInfo.package_name}{runtimeInfo.archive_size ? " · " + (runtimeInfo.archive_size / 1024 / 1024).toFixed(1) + " MB" : ""}</p>{runtimeInfo.checksum_sha256 && <p className="feature-footnote">SHA-256: {runtimeInfo.checksum_sha256}</p>}<a className="account-select" href={runtimeInfo.download_url} target="_blank" rel="noreferrer">{ar ? "فتح التنزيل الرسمي" : "Open official download"}</a></div>}</div><div className="settings-group"><label>{ar ? "عرض نافذة اللعبة" : "Game window width"}</label><input className="feature-input" type="number" min="640" max="7680" value={config.window_width} onChange={e => update({ window_width: Math.max(640, Number(e.target.value)) })} /></div><div className="settings-group"><label>{ar ? "ارتفاع نافذة اللعبة" : "Game window height"}</label><input className="feature-input" type="number" min="480" max="4320" value={config.window_height} onChange={e => update({ window_height: Math.max(480, Number(e.target.value)) })} /></div></div>
     <div className="settings-actions"><button onClick={() => void save()} disabled={saving}><Save size={17} />{saving ? (ar ? "جارٍ الحفظ..." : "Saving...") : (ar ? "حفظ الإعدادات" : "Save settings")}</button>{message && <span className="settings-message"><CheckCircle2 size={15} />{message}</span>}</div>
     </>}
   </section>;
