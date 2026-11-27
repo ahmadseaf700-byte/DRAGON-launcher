@@ -134,7 +134,7 @@ async fn download_java_runtime(
         return Err("The official package did not provide a valid SHA-256 checksum; download refused.".to_string());
     }
     let url = reqwest::Url::parse(&download_url).map_err(|e| format!("Invalid package URL: {e}"))?;
-    if url.scheme() != "https" || !matches!(url.host_str(), Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com")) {
+    if url.scheme() != "https" || !matches!(url.host_str(), Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com") | Some("release-assets.githubusercontent.com")) {
         return Err("Refusing a download outside approved HTTPS hosts".to_string());
     }
     if !matches!(platform.as_str(), "windows-x64" | "windows-aarch64" | "linux-x64" | "linux-aarch64" | "mac-x64" | "mac-aarch64") {
@@ -148,7 +148,7 @@ async fn download_java_runtime(
     let response = client.get(url.clone()).send().await.map_err(|e| format!("Java download failed: {e}"))?;
     if !response.status().is_success() { return Err(format!("Java download returned HTTP {}", response.status())); }
     let final_host = response.url().host_str().unwrap_or_default();
-    if !matches!(final_host, "github.com" | "githubusercontent.com" | "objects.githubusercontent.com") {
+    if !matches!(final_host, "github.com" | "githubusercontent.com" | "objects.githubusercontent.com" | "release-assets.githubusercontent.com") {
         return Err("Download redirected outside approved HTTPS hosts".to_string());
     }
     if let Some(expected) = archive_size {
