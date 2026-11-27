@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::{fs, io::{self, Read, Write}, net::{TcpStream, ToSocketAddrs}, path::{Path, PathBuf}, process::{Command, Stdio}, time::{Duration, Instant}};
+use std::{collections::HashMap, fs, io::{self, Read, Write}, net::{TcpStream, ToSocketAddrs}, path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{Mutex, OnceLock}, time::{Duration, Instant}};
 use sysinfo::System;
 use tauri::{Emitter, Manager};
 use zip::ZipArchive;
@@ -361,6 +361,52 @@ fn collect_argument_values(value: &Value, output: &mut Vec<String>) {
 #[derive(Serialize)]
 struct LaunchResult { pid: u32, log_file: String, java_executable: String }
 
+static GAME_PROCESSES: OnceLock<Mutex<HashMap<u32, Child>>> = OnceLock::new();
+
+fn game_processes() -> &'static Mutex<HashMap<u32, Child>> {
+    GAME_PROCESSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Serialize)]
+struct GameProcessStatus {
+    pid: u32,
+    running: bool,
+    exit_code: Option<i32>,
+}
+
+#[tauri::command]
+fn get_game_process_status(pid: u32) -> Result<GameProcessStatus, String> {
+    let mut processes = game_processes().lock().map_err(|_| "تعذر الوصول إلى قائمة عمليات اللعبة.".to_string())?;
+    let Some(child) = processes.get_mut(&pid) else {
+        return Ok(GameProcessStatus { pid, running: false, exit_code: None });
+    };
+    match child.try_wait().map_err(|e| format!("تعذر فحص عملية اللعبة: {e}"))? {
+        None => Ok(GameProcessStatus { pid, running: true, exit_code: None }),
+        Some(status) => {
+            let code = status.code();
+            processes.remove(&pid);
+            Ok(GameProcessStatus { pid, running: false, exit_code: code })
+        }
+    }
+}
+
+#[tauri::command]
+fn stop_game_process(pid: u32) -> Result<GameProcessStatus, String> {
+    let mut processes = game_processes().lock().map_err(|_| "تعذر الوصول إلى قائمة عمليات اللعبة.".to_string())?;
+    let Some(child) = processes.get_mut(&pid) else {
+        return Ok(GameProcessStatus { pid, running: false, exit_code: None });
+    };
+    if let Some(status) = child.try_wait().map_err(|e| format!("تعذر فحص عملية اللعبة: {e}"))? {
+        let code = status.code();
+        processes.remove(&pid);
+        return Ok(GameProcessStatus { pid, running: false, exit_code: code });
+    }
+    child.kill().map_err(|e| format!("تعذر إيقاف Minecraft: {e}"))?;
+    let status = child.wait().map_err(|e| format!("تعذر تأكيد إيقاف Minecraft: {e}"))?;
+    processes.remove(&pid);
+    Ok(GameProcessStatus { pid, running: false, exit_code: status.code() })
+}
+
 #[tauri::command]
 fn launch_minecraft(
     app: tauri::AppHandle,
@@ -512,7 +558,8 @@ fn launch_minecraft(
         .stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr)).spawn()
         .map_err(|e| format!("تعذر تشغيل Java ({java_path}): {e}. تحقق من مسار Java وإصدارها."))?;
     let pid = child.id();
-    drop(child);
+    let mut processes = game_processes().lock().map_err(|_| "تعذر تسجيل عملية Minecraft.".to_string())?;
+    processes.insert(pid, child);
     Ok(LaunchResult { pid, log_file: log_path.to_string_lossy().into_owned(), java_executable: java_path.to_string() })
 }
 
@@ -803,6 +850,6 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![get_system_environment, load_launcher_config,
-            save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, ping_minecraft_server])
+            save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
