@@ -12,6 +12,7 @@ import SettingsPanel from "./components/SettingsPanel";
 import LibraryCatalog from "./components/LibraryCatalog";
 import KeybindsPanel from "./components/KeybindsPanel";
 import ServersPanel from "./components/ServersPanel";
+import InstancesPanel from "./components/InstancesPanel";
 
 interface SystemEnv {
   os: string;
@@ -103,6 +104,7 @@ export default function App() {
   const navItems = useMemo<{ id: TabType; label: string; icon: LucideIcon }[]>(() => [
     { id: "home", label: t.home, icon: Home },
     { id: "versions", label: t.versions, icon: Layers3 },
+    { id: "instances", label: lang === "ar" ? "نسخ اللعبة" : "Instances", icon: Gamepad2 },
     { id: "mods", label: t.library, icon: Blocks },
     { id: "news", label: t.news, icon: Newspaper },
     { id: "accounts", label: t.accounts, icon: UserRound },
@@ -183,6 +185,8 @@ export default function App() {
 
           {activeTab === "versions" ? (
             <VersionCatalog lang={lang} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />
+           ) : activeTab === "instances" ? (
+            <InstancesPanel lang={lang} />
           ) : activeTab === "mods" ? (
             <LibraryCatalog lang={lang} />
           ) : activeTab === "accounts" ? (
