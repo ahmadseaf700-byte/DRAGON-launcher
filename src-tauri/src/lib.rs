@@ -413,7 +413,8 @@ fn launch_minecraft(
     version_id: String,
     player_name: String,
     player_uuid: String,
-    ram_mb: u64
+    ram_mb: u64,
+    instance_id: Option<String>
 ) -> Result<LaunchResult, String> {
     if std::env::consts::OS == "android" {
         return Err("تشغيل Minecraft Java مباشرة على Android غير مدعوم بهذا البناء؛ يلزم Runtime وطبقة توافق Android مخصصة.".to_string());
@@ -466,8 +467,25 @@ fn launch_minecraft(
             return Err(format!("هذا الإصدار يحتاج Java {required} أو أحدث، بينما المثبّت هو Java {java_major}."));
         }
     }
-    let game_dir = config.get("game_directory").and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| root.clone());
+    let game_dir = if let Some(id) = instance_id {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let instance_dir = launcher_data_dir()?.join("instances").join(&id);
+        let metadata: Value = serde_json::from_slice(&fs::read(instance_dir.join("instance.json"))
+            .map_err(|_| "النسخة المحددة لم تعد موجودة. حدّث قائمة النسخ.".to_string())?)
+            .map_err(|e| format!("Invalid instance metadata: {e}"))?;
+        if metadata.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+            return Err("Instance identity verification failed".to_string());
+        }
+        if metadata.get("version_id").and_then(Value::as_str) != Some(version_id.as_str()) {
+            return Err("إصدار النسخة المحددة لا يطابق إصدار التشغيل.".to_string());
+        }
+        instance_dir
+    } else {
+        config.get("game_directory").and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| root.clone())
+    };
     fs::create_dir_all(&game_dir).map_err(|e| format!("Could not create game directory: {e}"))?;
 
     let mut classpath_entries: Vec<String> = Vec::new();

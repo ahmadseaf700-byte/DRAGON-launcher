@@ -14,6 +14,8 @@ import KeybindsPanel from "./components/KeybindsPanel";
 import ServersPanel from "./components/ServersPanel";
 import InstancesPanel from "./components/InstancesPanel";
 
+interface GameInstance { id: string; name: string; version_id: string; created_at: number; game_directory: string; }
+
 interface SystemEnv {
   os: string;
   arch: string;
@@ -32,6 +34,8 @@ export default function App() {
   const [versionInstalled, setVersionInstalled] = useState(false);
   const [checkingVersion, setCheckingVersion] = useState(false);
   const [activeGamePid, setActiveGamePid] = useState<number | null>(null);
+  const [selectedInstance, setSelectedInstance] = useState<GameInstance | null>(() => { try { const raw = localStorage.getItem("dragon.activeInstance"); return raw ? JSON.parse(raw) as GameInstance : null; } catch { return null; } });
+  const effectiveVersion = selectedInstance?.version_id || selectedVersion;
   const [stoppingGame, setStoppingGame] = useState(false);
   const native = isTauri();
 
@@ -48,14 +52,14 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!native || !selectedVersion) { setVersionInstalled(false); return; }
+    if (!native || !effectiveVersion) { setVersionInstalled(false); return; }
     setCheckingVersion(true);
-    invoke<boolean>("is_minecraft_version_installed", { versionId: selectedVersion })
+    invoke<boolean>("is_minecraft_version_installed", { versionId: effectiveVersion })
       .then(value => { if (!cancelled) setVersionInstalled(value); })
       .catch(() => { if (!cancelled) setVersionInstalled(false); })
       .finally(() => { if (!cancelled) setCheckingVersion(false); });
     return () => { cancelled = true; };
-  }, [native, selectedVersion]);
+  }, [native, effectiveVersion]);
 
   useEffect(() => {
     if (!native || activeGamePid === null) return;
@@ -125,7 +129,7 @@ export default function App() {
   const handlePlay = async () => {
     setLaunchError(""); setLaunchMessage("");
     if (!native) { setLaunchError(lang === "ar" ? "شغّل نسخة التطبيق المثبتة لتشغيل Minecraft." : "Run the installed desktop app to launch Minecraft."); return; }
-    if (!selectedVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
+    if (!effectiveVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
     if (!versionInstalled) { setLaunchError(lang === "ar" ? "هذا الإصدار غير مثبت. نزّله أولاً من صفحة الإصدارات." : "This version is not installed. Install it from Versions first."); setActiveTab("versions"); return; }
     let accounts: Array<{ id: string; username: string; uuid: string }> = [];
     try { accounts = JSON.parse(localStorage.getItem("dragon.localAccounts") || "[]"); } catch { accounts = []; }
@@ -135,7 +139,7 @@ export default function App() {
     setLaunching(true);
     try {
       const result = await invoke<{ pid: number; log_file: string; java_executable: string }>("launch_minecraft", {
-        versionId: selectedVersion, playerName: account.username, playerUuid: account.uuid, ramMb: ramMB
+        versionId: effectiveVersion, playerName: account.username, playerUuid: account.uuid, ramMb: ramMB, instanceId: selectedInstance?.id ?? null
       });
       setActiveGamePid(result.pid);
       setLaunchMessage(lang === "ar"
@@ -186,7 +190,7 @@ export default function App() {
           {activeTab === "versions" ? (
             <VersionCatalog lang={lang} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />
            ) : activeTab === "instances" ? (
-            <InstancesPanel lang={lang} />
+            <InstancesPanel lang={lang} selectedId={selectedInstance?.id ?? null} onSelect={(item) => { setSelectedInstance(item); if (item) localStorage.setItem("dragon.activeInstance", JSON.stringify(item)); else localStorage.removeItem("dragon.activeInstance"); setLaunchMessage(item ? (lang === "ar" ? `النسخة المحددة: ${item.name}` : `Selected instance: ${item.name}`) : ""); }} />
           ) : activeTab === "mods" ? (
             <LibraryCatalog lang={lang} />
           ) : activeTab === "accounts" ? (
