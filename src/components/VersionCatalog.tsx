@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { Search, RefreshCw, CheckCircle2, AlertCircle, Download, Loader2 } from "lucide-react";
 import type { Language } from "../locales/translations";
 
@@ -45,6 +46,9 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
     setInstalling(version); setInstallError(""); setProgress({ stage: "client", done: 0, total: 1 }); setInstallMessage(ar ? "بدء تجهيز ملفات اللعبة من خوادم Mojang..." : "Preparing game files from Mojang...");
     let unlisten: (() => void) | undefined;
     try {
+      let granted = await isPermissionGranted();
+      if (!granted) granted = (await requestPermission()) === "granted";
+      if (!granted) throw new Error(ar ? "اسمح بالإشعارات لمتابعة تقدم التنزيل." : "Allow notifications to receive download progress.");
       unlisten = await listen<{ version: string; stage: string; done: number; total: number }>("minecraft-install-progress", event => {
         if (event.payload.version !== version) return;
         setProgress({ stage: event.payload.stage, done: event.payload.done, total: event.payload.total });
@@ -55,6 +59,7 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
       });
       const result = await invoke<{ version: string; game_directory: string; downloaded_bytes: number; libraries: number; natives: number; assets: number }>("install_minecraft_version", { versionId: version });
       setInstalledVersion(version);
+      await sendNotification({ id: 7311, title: "DRAGON Launcher", body: ar ? `اكتمل تنزيل Minecraft ${version}.` : `Minecraft ${version} download completed.`, ongoing: false, autoCancel: true });
       const mb = (result.downloaded_bytes / 1048576).toFixed(1);
       setInstallMessage(ar
         ? "اكتمل تنزيل " + result.version + " (" + mb + " MB) — المكتبات: " + result.libraries + " — الأصول: " + result.assets + ". المجلد: " + result.game_directory
