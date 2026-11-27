@@ -1,0 +1,15 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Cairo:wght@400;500;600;700;800&display=swap");
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { font-family: Inter, Cairo, system-ui, sans-serif; color-scheme: dark; }
+html, body, #root { min-width: 320px; min-height: 100%; margin: 0; }
+body { background: #090B12; }
+button, input { font: inherit; }
+button:focus-visible, input:focus-visible { outline: 2px solid #FB7185; outline-offset: 2px; }
+* { scrollbar-width: thin; scrollbar-color: #344158 #090B12; }
+::-webkit-scrollbar { width: 7px; height: 7px; }
+::-webkit-scrollbar-track { background: #090B12; }
+::-webkit-scrollbar-thumb { background: #344158; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #E11D48; }
