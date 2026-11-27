@@ -133,7 +133,7 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
                 last_error = error;
                 let _ = fs::remove_file(&temporary);
                 if attempt < 3 {
-                    tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
+                    std::thread::sleep(Duration::from_millis(500 * attempt as u64));
                 }
             }
         }
