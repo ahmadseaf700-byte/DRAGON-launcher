@@ -21,6 +21,7 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
   const [installMessage, setInstallMessage] = useState("");
   const [installError, setInstallError] = useState("");
   const [installedVersion, setInstalledVersion] = useState("");
+  const [progress, setProgress] = useState<{ stage: string; done: number; total: number } | null>(null);
 
   const load = async () => {
     setLoading(true); setError("");
@@ -41,13 +42,15 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
       setInstallError(ar ? "التثبيت يحتاج تشغيل نسخة DRAGON المثبتة، وليس معاينة المتصفح." : "Installation requires the installed DRAGON app, not browser preview.");
       return;
     }
-    setInstalling(version); setInstallError(""); setInstallMessage(ar ? "بدء تجهيز ملفات اللعبة من خوادم Mojang..." : "Preparing game files from Mojang...");
+    setInstalling(version); setInstallError(""); setProgress({ stage: "client", done: 0, total: 1 }); setInstallMessage(ar ? "بدء تجهيز ملفات اللعبة من خوادم Mojang..." : "Preparing game files from Mojang...");
     let unlisten: (() => void) | undefined;
     try {
-      unlisten = await listen<{ stage: string; done: number; total: number }>("minecraft-install-progress", event => {
+      unlisten = await listen<{ version: string; stage: string; done: number; total: number }>("minecraft-install-progress", event => {
+        if (event.payload.version !== version) return;
+        setProgress({ stage: event.payload.stage, done: event.payload.done, total: event.payload.total });
         const labels: Record<string, string> = ar
-          ? { client: "تم تنزيل ملف اللعبة", libraries: "تنزيل المكتبات", natives: "تجهيز مكتبات النظام الأصلية", assets: "تنزيل أصول اللعبة", complete: "اكتمل تجهيز ملفات الإصدار" }
-          : { client: "Client downloaded", libraries: "Downloading libraries", natives: "Extracting native libraries", assets: "Downloading game assets", complete: "Version files prepared" };
+          ? { client: "تنزيل ملف اللعبة", libraries: "تنزيل المكتبات", natives: "تجهيز مكتبات النظام الأصلية", assets: "تنزيل أصول اللعبة", complete: "اكتمل تجهيز ملفات الإصدار" }
+          : { client: "Downloading game client", libraries: "Downloading libraries", natives: "Preparing native libraries", assets: "Downloading game assets", complete: "Version installation complete" };
         setInstallMessage(labels[event.payload.stage] || event.payload.stage);
       });
       const result = await invoke<{ version: string; game_directory: string; downloaded_bytes: number; libraries: number; natives: number; assets: number }>("install_minecraft_version", { versionId: version });
@@ -85,6 +88,14 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
       {error && <div role="alert" className="mt-4 flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200"><AlertCircle size={18} className="mt-0.5 shrink-0" /><span>{ar ? "تعذر الاتصال بكتالوج Mojang:" : "Could not load Mojang catalog:"} {error}</span></div>}
       {installError && <div role="alert" className="mt-4 flex items-start gap-2 rounded-xl border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200"><AlertCircle size={18} className="mt-0.5 shrink-0" /><span>{installError}</span></div>}
       {installMessage && <div role="status" className="mt-4 flex items-start gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200"><CheckCircle2 size={18} className="mt-0.5 shrink-0" /><span className="break-all">{installMessage}</span></div>}
+      {installing && progress && <div className="mt-3 rounded-xl border border-dragon-border bg-dragon-dark p-4">
+        <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+          <strong>{ar ? "تقدم التنزيل" : "Download progress"}</strong>
+          <span className="font-mono text-emerald-300">{progress.total > 0 ? Math.min(100, Math.floor(progress.done / progress.total * 100)) : 0}%</span>
+        </div>
+        <div className="h-3 overflow-hidden rounded-full bg-slate-700"><div className="h-full rounded-full bg-emerald-500 transition-all duration-200" style={{ width: (progress.total > 0 ? Math.min(100, progress.done / progress.total * 100) : 0) + "%" }} /></div>
+        <p className="mt-2 text-xs text-slate-400">{ar ? `المرحلة الحالية: ${progress.stage} — ${progress.done} من ${progress.total}` : `Current stage: ${progress.stage} — ${progress.done} of ${progress.total}`}</p>
+      </div>}
       {loading && <p className="py-8 text-center text-sm text-slate-400">{ar ? "جارٍ جلب الإصدارات من Mojang..." : "Loading versions from Mojang..."}</p>}
       {!loading && !error && <>
         <p className="mt-4 text-xs text-slate-500">{ar ? "تم العثور على " + filtered.length + " إصدار" : filtered.length + " versions found"}</p>

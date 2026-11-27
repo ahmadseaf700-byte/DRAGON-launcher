@@ -37,7 +37,29 @@ export default function App() {
   const [selectedInstance, setSelectedInstance] = useState<GameInstance | null>(() => { try { const raw = localStorage.getItem("dragon.activeInstance"); return raw ? JSON.parse(raw) as GameInstance : null; } catch { return null; } });
   const effectiveVersion = selectedInstance?.version_id || selectedVersion;
   const [stoppingGame, setStoppingGame] = useState(false);
+
   const native = isTauri();
+
+  // Reconcile the saved selection against the native instance registry on every app start.
+  // This prevents stale localStorage data from pointing Play at a deleted or changed instance.
+  useEffect(() => {
+    if (!native) return;
+    let cancelled = false;
+    invoke<GameInstance[]>("list_game_instances")
+      .then(instances => {
+        if (cancelled) return;
+        const savedId = selectedInstance?.id;
+        const current = savedId ? instances.find(instance => instance.id === savedId) ?? null : null;
+        setSelectedInstance(current);
+        if (current) localStorage.setItem("dragon.activeInstance", JSON.stringify(current));
+        else localStorage.removeItem("dragon.activeInstance");
+      })
+      .catch(error => {
+        // Keep the last saved selection if the registry cannot be read temporarily.
+        console.error("Could not reconcile saved Minecraft instance:", error);
+      });
+    return () => { cancelled = true; };
+  }, [native]);
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -109,7 +131,7 @@ export default function App() {
     { id: "home", label: t.home, icon: Home },
     { id: "versions", label: t.versions, icon: Layers3 },
     { id: "instances", label: lang === "ar" ? "نسخ اللعبة" : "Instances", icon: Gamepad2 },
-    { id: "mods", label: t.library, icon: Blocks },
+    { id: "mods", label: lang === "ar" ? "مكتبة المودات" : "Mods Library", icon: Blocks },
     { id: "news", label: t.news, icon: Newspaper },
     { id: "accounts", label: t.accounts, icon: UserRound },
     { id: "keybinds", label: lang === "ar" ? "الأزرار" : "Keybinds", icon: Keyboard },
@@ -192,7 +214,7 @@ export default function App() {
            ) : activeTab === "instances" ? (
             <InstancesPanel lang={lang} selectedId={selectedInstance?.id ?? null} onSelect={(item) => { setSelectedInstance(item); if (item) localStorage.setItem("dragon.activeInstance", JSON.stringify(item)); else localStorage.removeItem("dragon.activeInstance"); setLaunchMessage(item ? (lang === "ar" ? `النسخة المحددة: ${item.name}` : `Selected instance: ${item.name}`) : ""); }} />
           ) : activeTab === "mods" ? (
-            <LibraryCatalog lang={lang} />
+            <LibraryCatalog lang={lang} instanceId={selectedInstance?.id ?? null} />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
           ) : activeTab === "keybinds" ? (
@@ -261,13 +283,13 @@ export default function App() {
           {(launchMessage || launchError) && <div className={"launch-feedback " + (launchError ? "is-error" : "is-success")} role="status">{launchError || launchMessage}</div>}
           <footer className="play-dock">
             <div className="dock-game-icon"><Gamepad2 size={23} /></div>
-            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{activeGamePid !== null ? (lang === "ar" ? "اللعبة تعمل · PID " : "Running · PID ") + activeGamePid : !selectedVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + selectedVersion : t.notInstalled + " · " + selectedVersion}</span></div>
+            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{activeGamePid !== null ? (lang === "ar" ? "اللعبة تعمل · PID " : "Running · PID ") + activeGamePid : !effectiveVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + effectiveVersion : t.notInstalled + " · " + effectiveVersion}</span></div>
             {activeGamePid !== null ? (
               <button className="play-button" onClick={() => void handleStopGame()} disabled={stoppingGame} title={lang === "ar" ? "إيقاف عملية Minecraft التي بدأها اللانشر" : "Stop the Minecraft process launched by DRAGON"}>
                 <Square size={16} fill="currentColor" />{stoppingGame ? (lang === "ar" ? "جارٍ الإيقاف..." : "Stopping...") : (lang === "ar" ? "إيقاف" : "Stop")}
               </button>
             ) : (
-              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
+              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !effectiveVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !effectiveVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
             )}
           </footer>
           <p className="footer-note">DRAGON LAUNCHER <span>•</span> BUILT FOR YOUR WORLDS</p>
