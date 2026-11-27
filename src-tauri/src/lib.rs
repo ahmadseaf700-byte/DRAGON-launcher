@@ -87,7 +87,7 @@ async fn download_modrinth_file(
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| "Invalid download filename".to_string())?;
-    if safe_name != filename || filename.contains(['/', '\\\\']) {
+    if safe_name != filename || filename.contains('/') || filename.contains('\\') {
         return Err("Invalid download filename".to_string());
     }
     let folder = match kind.as_str() {
