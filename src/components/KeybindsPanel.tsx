@@ -44,9 +44,23 @@ export default function KeybindsPanel({ lang }: { lang: Language }) {
   const importFile = async (file?: File) => {
     if (!file) return;
     try {
-      const parsed = JSON.parse(await file.text());
-      const incoming = Array.isArray(parsed) ? parsed : parsed.bindings;
-      if (!Array.isArray(incoming) || incoming.length > 100) throw new Error("Invalid keybind file");
+      const fileText = await file.text();
+      let incoming: any;
+      if (file.name.toLowerCase().endsWith(".txt")) {
+        incoming = fileText.split(/\\r?\\n/).flatMap(line => {
+          const match = line.match(/^(key_key\\.[^:]+):(.+)$/);
+          if (!match) return [];
+          const id = match[1].replace("key_key.", "");
+          return [{ name: id.replaceAll("_", " "), key: match[2].trim().replace("key.keyboard.", "").replace("key.mouse.", "MOUSE_"), actions: [{ type: "press_key", value: match[2].trim() }] }];
+        });
+      } else {
+        const parsed = JSON.parse(fileText);
+        incoming = Array.isArray(parsed) ? parsed : (parsed.bindings || parsed.keybinds);
+        if (incoming && !Array.isArray(incoming) && typeof incoming === "object") {
+          incoming = Object.entries(incoming).map(([name, key]) => ({ name, key: String(key), actions: [{ type: "press_key", value: String(key) }] }));
+        }
+      }
+      if (!Array.isArray(incoming) || incoming.length > 100) throw new Error("Unsupported keybind format");
       const clean = incoming.map((item: any) => {
         if (!item || typeof item.name !== "string" || typeof item.key !== "string" || !Array.isArray(item.actions) || item.actions.length < 1 || item.actions.length > 4) throw new Error("Each button must have 1–4 actions");
         const actions = item.actions.map((a: any) => {
@@ -62,12 +76,12 @@ export default function KeybindsPanel({ lang }: { lang: Language }) {
 
   return <section className="feature-page">
     <div className="feature-intro"><div className="feature-symbol"><Keyboard size={25} /></div><div><h3>{ar ? "محرر الأزرار والاختصارات" : "Keybind & macro editor"}</h3><p>{ar ? "أنشئ أزرارك وسمّها ورتّب حتى 4 وظائف متسلسلة لكل زر." : "Create named buttons and configure up to 4 ordered actions per button."}</p></div></div>
-    <div className="feature-callout"><Keyboard size={18}/><span>{ar ? "يمكن استيراد وتصدير ملف DRAGON JSON. استيراد صيغ Prism/Modrinth/لانشرات أخرى يحتاج محولات خاصة حسب تنسيق كل لانشر. حفظ الاختصارات يعمل الآن؛ تنفيذها داخل Minecraft يحتاج ربط محرك الإدخال الذي لم يكتمل بعد." : "DRAGON JSON import/export is supported. Other launcher formats need format-specific adapters. Profiles save now; in-game execution requires the input bridge, which is not implemented yet."}</span></div>
+    <div className="feature-callout"><Keyboard size={18}/><span>{ar ? "يمكن استيراد وتصدير ملف DRAGON JSON. يمكن استيراد JSON أو خيارات Minecraft options.txt من مجلد اللعبة. ملفات الماكرو الخاصة بمودات خارجية تحتاج محولاً خاصاً بصيغتها. حفظ الاختصارات يعمل الآن؛ تنفيذها داخل Minecraft يحتاج ربط محرك الإدخال الذي لم يكتمل بعد." : "DRAGON JSON import/export is supported. Minecraft options.txt and DRAGON JSON can be imported. Third-party macro formats need dedicated adapters. Profiles save now; in-game execution requires the input bridge, which is not implemented yet."}</span></div>
     <div className="settings-actions">
       <button onClick={add}><Plus size={16}/>{ar ? "إضافة زر" : "Add button"}</button>
       <button onClick={() => fileRef.current?.click()}><FileUp size={16}/>{ar ? "استيراد ملف أزرار" : "Import keybind file"}</button>
       <button onClick={exportFile}><Download size={16}/>{ar ? "تصدير ملف الأزرار" : "Export profile"}</button>
-      <input ref={fileRef} type="file" accept=".json,application/json" hidden onChange={e => { void importFile(e.target.files?.[0]); e.currentTarget.value = ""; }} />
+      <input ref={fileRef} type="file" accept=".json,.txt,application/json,text/plain" hidden onChange={e => { void importFile(e.target.files?.[0]); e.currentTarget.value = ""; }} />
     </div>
     {notice && <p className="settings-message">{notice}</p>}{error && <p className="feature-error">{error}</p>}
     {bindings.map(binding => <article className="settings-group" key={binding.id}>
