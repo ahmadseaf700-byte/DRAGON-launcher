@@ -187,7 +187,19 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
     let mut installed_natives = 0usize;
     let natives_dir = root.join("versions").join(&version_id).join("natives");
     for library in libraries.iter().filter(|library| library_allowed(library)) {
-        if let Some(classifier_key) = native_classifier_key(library) {\n            if let Some(classifier) = library.pointer(&format!("/downloads/classifiers/{classifier_key}")) {\n                if let (Some(url), Some(path)) = (classifier.get("url").and_then(Value::as_str), classifier.get("path").and_then(Value::as_str)) {\n                    let relative = safe_relative_path(path)?;\n                    let archive_path = root.join("libraries").join(relative);\n                    let sha = classifier.get("sha1").and_then(Value::as_str);\n                    total_bytes += download_verified(&client, url, &archive_path, sha).await?;\n                    let excludes = library.pointer("/extract/exclude").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();\n                    extract_native_archive(&archive_path, &natives_dir, &excludes)?;\n                    installed_natives += 1;\n                }\n            }\n        }
+        if let Some(classifier_key) = native_classifier_key(library) {
+            if let Some(classifier) = library.pointer(&format!("/downloads/classifiers/{classifier_key}")) {
+                if let (Some(url), Some(path)) = (classifier.get("url").and_then(Value::as_str), classifier.get("path").and_then(Value::as_str)) {
+                    let relative = safe_relative_path(path)?;
+                    let archive_path = root.join("libraries").join(relative);
+                    let sha = classifier.get("sha1").and_then(Value::as_str);
+                    total_bytes += download_verified(&client, url, &archive_path, sha).await?;
+                    let excludes = library.pointer("/extract/exclude").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+                    extract_native_archive(&archive_path, &natives_dir, &excludes)?;
+                    installed_natives += 1;
+                }
+            }
+        }
         if let Some(artifact) = library.pointer("/downloads/artifact") {
             if let (Some(url), Some(path)) = (artifact.get("url").and_then(Value::as_str), artifact.get("path").and_then(Value::as_str)) {
                 let relative = safe_relative_path(path)?;
