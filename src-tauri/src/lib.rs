@@ -270,6 +270,66 @@ async fn download_java_runtime(
     Ok(JavaRuntimeInstallResult { archive_path: destination.to_string_lossy().to_string(), bytes: bytes.len() as u64, sha256: digest, java_major })
 }
 
+#[derive(Serialize)]
+struct JavaRuntimeInstallStatus {
+    java_path: String,
+    java_version: String,
+    java_major: u32,
+}
+
+#[tauri::command]
+fn install_java_runtime(
+    app: tauri::AppHandle,
+    archive_path: String,
+    java_major: u32,
+    platform: String,
+) -> Result<JavaRuntimeInstallStatus, String> {
+    if !(8..=99).contains(&java_major) { return Err("Invalid Java major version".to_string()); }
+    if !matches!(platform.as_str(), "windows-x64" | "windows-aarch64" | "linux-x64" | "linux-aarch64" | "mac-x64" | "mac-aarch64") {
+        return Err("Unsupported Java runtime platform".to_string());
+    }
+    let base = launcher_data_dir()?.join("runtimes").join(format!("java-{java_major}")).join(&platform);
+    let base_canonical = base.canonicalize().map_err(|e| format!("Java runtime directory does not exist: {e}"))?;
+    let archive = PathBuf::from(&archive_path).canonicalize().map_err(|e| format!("Downloaded Java archive not found: {e}"))?;
+    if !archive.starts_with(&base_canonical) || !archive.is_file() {
+        return Err("Archive path is outside the managed Java runtime directory".to_string());
+    }
+    let staging = base.join("install-staging");
+    if staging.exists() { fs::remove_dir_all(&staging).map_err(|e| format!("Could not clear previous staging directory: {e}"))?; }
+    extract_java_archive(&archive, &staging)?;
+    let executable = match find_java_executable(&staging) {
+        Ok(path) => path,
+        Err(error) => { let _ = fs::remove_dir_all(&staging); return Err(error); }
+    };
+    let output = match Command::new(&executable).arg("-version").output() {
+        Ok(output) => output,
+        Err(error) => { let _ = fs::remove_dir_all(&staging); return Err(format!("Extracted Java could not start: {error}")); }
+    };
+    let version_text = String::from_utf8_lossy(&output.stderr).to_string()
+        + &String::from_utf8_lossy(&output.stdout);
+    let actual_major = parse_java_major(&version_text).ok_or("Could not identify extracted Java version")?;
+    if !output.status.success() || actual_major != java_major {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(format!("Extracted Java version mismatch: expected {java_major}, got {actual_major}."));
+    }
+    let relative = executable.strip_prefix(&staging).map_err(|_| "Java executable escaped staging directory")?;
+    let installed = base.join("installed");
+    if installed.exists() { fs::remove_dir_all(&installed).map_err(|e| format!("Could not replace old Java runtime: {e}"))?; }
+    fs::rename(&staging, &installed).map_err(|e| format!("Could not finalize Java installation: {e}"))?;
+    let final_java = installed.join(relative);
+    let config_path = config_file(&app)?;
+    let mut config: Value = if config_path.exists() {
+        serde_json::from_slice(&fs::read(&config_path).map_err(|e| format!("Could not read launcher settings: {e}"))?)
+            .map_err(|e| format!("Invalid launcher settings: {e}"))?
+    } else { json!({"ram_mb":4096,"game_directory":"","java_path":"","window_width":1280,"window_height":720,"language":"ar"}) };
+    config["java_path"] = Value::String(final_java.to_string_lossy().to_string());
+    let serialized = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
+    let temp_config = config_path.with_extension("json.tmp");
+    fs::write(&temp_config, serialized).map_err(|e| format!("Could not save Java setting: {e}"))?;
+    fs::rename(&temp_config, &config_path).map_err(|e| format!("Could not activate installed Java: {e}"))?;
+    Ok(JavaRuntimeInstallStatus { java_path: final_java.to_string_lossy().to_string(), java_version: version_text.trim().to_string(), java_major: actual_major })
+}
+
 fn library_allowed(library: &Value) -> bool {
     let Some(rules) = library.get("rules").and_then(Value::as_array) else { return true; };
     let os = match std::env::consts::OS { "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => "unsupported" };
@@ -1390,7 +1450,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, get_java_runtime_download, download_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, get_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
