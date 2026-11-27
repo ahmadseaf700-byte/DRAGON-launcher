@@ -111,6 +111,96 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
     Ok(bytes.len() as u64)
 }
 
+fn extract_java_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    const MAX_FILES: usize = 50_000;
+    const MAX_EXPANDED: u64 = 1024 * 1024 * 1024;
+    fs::create_dir_all(destination).map_err(|e| format!("Could not create Java extraction directory: {e}"))?;
+    let name = archive_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+    let mut count = 0usize;
+    let mut expanded = 0u64;
+    if name.ends_with(".zip") {
+        let file = fs::File::open(archive_path).map_err(|e| format!("Could not open Java ZIP: {e}"))?;
+        let mut archive = ZipArchive::new(file).map_err(|e| format!("Invalid Java ZIP archive: {e}"))?;
+        for i in 0..archive.len() {
+            count += 1;
+            if count > MAX_FILES { return Err("Java archive contains too many entries".to_string()); }
+            let mut entry = archive.by_index(i).map_err(|e| format!("Could not read Java ZIP entry: {e}"))?;
+            let raw = entry.name().replace('\\', "/");
+            let relative = safe_relative_path(&raw)?;
+            let output = destination.join(relative);
+            let mode = entry.unix_mode().unwrap_or(0);
+            if mode & 0o170000 == 0o120000 { return Err("Java archive contains a symbolic link; extraction refused".to_string()); }
+            if entry.is_dir() { fs::create_dir_all(&output).map_err(|e| format!("Could not create Java directory: {e}"))?; continue; }
+            if mode & 0o170000 != 0 && mode & 0o170000 != 0o100000 {
+                return Err("Java archive contains a special file; extraction refused".to_string());
+            }
+            expanded = expanded.checked_add(entry.size()).ok_or("Java archive size overflow")?;
+            if expanded > MAX_EXPANDED { return Err("Expanded Java runtime exceeds 1 GB safety limit".to_string()); }
+            if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|e| format!("Could not create Java directory: {e}"))?; }
+            let mut out = fs::File::create(&output).map_err(|e| format!("Could not create Java file: {e}"))?;
+            io::copy(&mut entry, &mut out).map_err(|e| format!("Could not extract Java file: {e}"))?;
+            #[cfg(unix)]
+            if mode & 0o111 != 0 {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&output, fs::Permissions::from_mode(mode & 0o777))
+                    .map_err(|e| format!("Could not set Java executable permissions: {e}"))?;
+            }
+        }
+    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        let file = fs::File::open(archive_path).map_err(|e| format!("Could not open Java TAR.GZ: {e}"))?;
+        let decoder = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        let entries = archive.entries().map_err(|e| format!("Invalid Java TAR.GZ archive: {e}"))?;
+        for item in entries {
+            count += 1;
+            if count > MAX_FILES { return Err("Java archive contains too many entries".to_string()); }
+            let mut entry = item.map_err(|e| format!("Could not read Java TAR entry: {e}"))?;
+            let entry_type = entry.header().entry_type();
+            let raw = entry.path().map_err(|e| format!("Invalid Java archive path: {e}"))?.to_string_lossy().replace('\\', "/");
+            let relative = safe_relative_path(&raw)?;
+            let output = destination.join(relative);
+            if entry_type.is_dir() { fs::create_dir_all(&output).map_err(|e| format!("Could not create Java directory: {e}"))?; continue; }
+            if !entry_type.is_file() { return Err("Java archive contains a link or special file; extraction refused".to_string()); }
+            let size = entry.header().size().map_err(|e| format!("Invalid Java entry size: {e}"))?;
+            expanded = expanded.checked_add(size).ok_or("Java archive size overflow")?;
+            if expanded > MAX_EXPANDED { return Err("Expanded Java runtime exceeds 1 GB safety limit".to_string()); }
+            if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|e| format!("Could not create Java directory: {e}"))?; }
+            let mut out = fs::File::create(&output).map_err(|e| format!("Could not create Java file: {e}"))?;
+            io::copy(&mut entry, &mut out).map_err(|e| format!("Could not extract Java file: {e}"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = entry.header().mode().unwrap_or(0) & 0o777;
+                if mode & 0o111 != 0 {
+                    fs::set_permissions(&output, fs::Permissions::from_mode(mode))
+                        .map_err(|e| format!("Could not set Java executable permissions: {e}"))?;
+                }
+            }
+        }
+    } else {
+        return Err("Unsupported Java archive format (expected ZIP or TAR.GZ)".to_string());
+    }
+    Ok(())
+}
+
+fn find_java_executable(root: &Path) -> Result<PathBuf, String> {
+    let expected = if cfg!(windows) { "java.exe" } else { "java" };
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = pending.pop() {
+        if depth > 6 { continue; }
+        let entries = fs::read_dir(&dir).map_err(|e| format!("Could not inspect extracted Java directory: {e}"))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Could not inspect Java directory entry: {e}"))?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|e| format!("Could not inspect Java file type: {e}"))?;
+            if kind.is_symlink() { continue; }
+            if kind.is_file() && path.file_name().and_then(|n| n.to_str()) == Some(expected) { return Ok(path); }
+            if kind.is_dir() { pending.push((path, depth + 1)); }
+        }
+    }
+    Err("Java executable was not found in the extracted archive".to_string())
+}
+
 #[derive(Serialize)]
 struct JavaRuntimeInstallResult {
     archive_path: String,
