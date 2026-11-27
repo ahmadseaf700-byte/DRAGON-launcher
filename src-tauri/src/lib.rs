@@ -354,7 +354,7 @@ fn launch_minecraft(
         ("${assets_root}", assets_root.to_string_lossy().into_owned()),
         ("${assets_index_name}", assets_index.to_string()),
         ("${auth_uuid}", uuid_clean),
-        ("${auth_access_token}", String::new()),
+        ("${auth_access_token}", "0".to_string()),
         ("${user_type}", "legacy".to_string()),
         ("${version_type}", version_type.to_string()),
         ("${natives_directory}", natives_dir.to_string_lossy().into_owned()),
