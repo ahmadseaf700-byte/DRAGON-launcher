@@ -95,7 +95,7 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
         </div>
         <div className="h-3 overflow-hidden rounded-full bg-slate-700"><div className="h-full rounded-full bg-emerald-500 transition-all duration-200" style={{ width: (progress.total > 0 ? Math.min(100, progress.done / progress.total * 100) : 0) + "%" }} /></div>
         <p className="mt-2 text-xs text-slate-400">{ar ? `المرحلة الحالية: ${progress.stage} — ${progress.done} من ${progress.total}` : `Current stage: ${progress.stage} — ${progress.done} of ${progress.total}`}</p>
-      </div>
+      </div>}
       {loading && <p className="py-8 text-center text-sm text-slate-400">{ar ? "جارٍ جلب الإصدارات من Mojang..." : "Loading versions from Mojang..."}</p>}
       {!loading && !error && <>
         <p className="mt-4 text-xs text-slate-500">{ar ? "تم العثور على " + filtered.length + " إصدار" : filtered.length + " versions found"}</p>
