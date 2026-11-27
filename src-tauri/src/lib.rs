@@ -2,9 +2,10 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::{fs, path::{Path, PathBuf}};
+use std::{fs, io, path::{Path, PathBuf}};
 use sysinfo::System;
 use tauri::{Emitter, Manager};
+use zip::ZipArchive;
 
 #[derive(Serialize)]
 struct SystemEnvironment {
@@ -81,7 +82,7 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
 
 fn library_allowed(library: &Value) -> bool {
     let Some(rules) = library.get("rules").and_then(Value::as_array) else { return true; };
-    let os = match std::env::consts::OS { "windows" => "windows", "macos" => "osx", _ => "linux" };
+    let os = match std::env::consts::OS { "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => "unsupported" };
     let mut allowed = false;
     for rule in rules {
         let action = rule.get("action").and_then(Value::as_str).unwrap_or("disallow");
@@ -100,8 +101,54 @@ fn safe_relative_path(raw: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
+
+fn native_classifier_key(library: &Value) -> Option<String> {
+    let os = match std::env::consts::OS {
+        "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => return None
+    };
+    let base = library.get("natives")?.get(os)?.as_str()?;
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "64", "x86" => "32", "aarch64" => "arm64", _ => return None
+    };
+    let expanded = base.replace("${arch}", if arch == "arm64" { "64" } else { arch });
+    let classifiers = library.pointer("/downloads/classifiers")?.as_object()?;
+    let mut candidates = vec![expanded.clone()];
+    if arch == "arm64" {
+        candidates.insert(0, format!("{base}-arm64"));
+    } else {
+        candidates.insert(0, format!("{base}-{arch}"));
+    }
+    candidates.into_iter().find(|key| classifiers.contains_key(key))
+}
+
+fn extract_native_archive(archive_path: &Path, destination: &Path, excludes: &[String]) -> Result<(), String> {
+    let file = fs::File::open(archive_path).map_err(|e| format!("Could not open native archive: {e}"))?;
+    let mut archive = ZipArchive::new(file).map_err(|e| format!("Invalid native archive: {e}"))?;
+    fs::create_dir_all(destination).map_err(|e| format!("Could not create natives directory: {e}"))?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(|e| format!("Could not read native archive entry: {e}"))?;
+        let Some(relative) = entry.enclosed_name().map(Path::to_path_buf) else { continue; };
+        let normalized = relative.to_string_lossy().replace('\\', "/");
+        if normalized.split('/').any(|part| part == "META-INF") ||
+            excludes.iter().any(|excluded| normalized == *excluded || normalized.starts_with(&format!("{}/", excluded.trim_end_matches('/')))) {
+            continue;
+        }
+        #[cfg(unix)]
+        if entry.unix_mode().map(|mode| (mode & 0o170000) == 0o120000).unwrap_or(false) { continue; }
+        let output = destination.join(relative);
+        if entry.is_dir() {
+            fs::create_dir_all(&output).map_err(|e| format!("Could not create native subdirectory: {e}"))?;
+        } else {
+            if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
+            let mut out = fs::File::create(&output).map_err(|e| format!("Could not write native file: {e}"))?;
+            io::copy(&mut entry, &mut out).map_err(|e| format!("Could not extract native file: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
-struct InstallResult { version: String, game_directory: String, downloaded_bytes: u64, libraries: usize, assets: usize }
+struct InstallResult { version: String, game_directory: String, downloaded_bytes: u64, libraries: usize, natives: usize, assets: usize }
 
 #[tauri::command]
 async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) -> Result<InstallResult, String> {
@@ -137,8 +184,10 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
 
     let libraries = metadata.get("libraries").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut installed_libraries = 0usize;
+    let mut installed_natives = 0usize;
+    let natives_dir = root.join("versions").join(&version_id).join("natives");
     for library in libraries.iter().filter(|library| library_allowed(library)) {
-        // Native classifiers are platform-specific archives; launcher runtime extraction is a separate stage.
+        if let Some(classifier_key) = native_classifier_key(library) {\n            if let Some(classifier) = library.pointer(&format!("/downloads/classifiers/{classifier_key}")) {\n                if let (Some(url), Some(path)) = (classifier.get("url").and_then(Value::as_str), classifier.get("path").and_then(Value::as_str)) {\n                    let relative = safe_relative_path(path)?;\n                    let archive_path = root.join("libraries").join(relative);\n                    let sha = classifier.get("sha1").and_then(Value::as_str);\n                    total_bytes += download_verified(&client, url, &archive_path, sha).await?;\n                    let excludes = library.pointer("/extract/exclude").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();\n                    extract_native_archive(&archive_path, &natives_dir, &excludes)?;\n                    installed_natives += 1;\n                }\n            }\n        }
         if let Some(artifact) = library.pointer("/downloads/artifact") {
             if let (Some(url), Some(path)) = (artifact.get("url").and_then(Value::as_str), artifact.get("path").and_then(Value::as_str)) {
                 let relative = safe_relative_path(path)?;
