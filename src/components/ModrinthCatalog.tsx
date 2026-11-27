@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Search, Download, RefreshCw, Package, Blocks, ExternalLink, CheckCircle2, AlertCircle } from "lucide-react";
+import { Search, Download, RefreshCw, Package, Blocks, ExternalLink, CheckCircle2, AlertCircle, FileUp } from "lucide-react";
 import type { Language } from "../locales/translations";
 
 type Hit = { project_id: string; slug: string; title: string; description: string; downloads: number; icon_url?: string; versions?: string[] };
@@ -17,7 +17,7 @@ export default function ModrinthCatalog({ lang, kind }: { lang: Language; kind: 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [busyId, setBusyId] = useState("");
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState("");\n  const externalFileRef = useRef<HTMLInputElement>(null);
 
   const search = async () => {
     setLoading(true); setError("");
@@ -59,8 +59,28 @@ export default function ModrinthCatalog({ lang, kind }: { lang: Language; kind: 
     finally { setBusyId(""); }
   };
 
+  const importExternal = async (file?: File) => {
+    if (!file) return;
+    if (!native) { setError(ar ? "استيراد الملفات إلى مجلد اللعبة يتطلب التطبيق المثبت." : "Importing into the game folder requires the installed app."); return; }
+    if (!file.name.toLowerCase().endsWith(".jar") || file.size > 100 * 1024 * 1024) {
+      setError(ar ? "اختر ملف مود .jar لا يتجاوز 100 MB." : "Choose a .jar mod file no larger than 100 MB."); return;
+    }
+    setBusyId("external"); setError(""); setNotice("");
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      const chunk = 0x8000;
+      for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+      const dataBase64 = btoa(binary);
+      const path = await invoke<string>("import_external_mod", { filename: file.name, dataBase64 });
+      setNotice((ar ? "تم استيراد المود إلى: " : "Imported mod to: ") + path);
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
+    finally { setBusyId(""); }
+  };
+
   return <section className="feature-page">
     <div className="feature-intro"><div className="feature-symbol">{kind === "mod" ? <Blocks size={25} /> : <Package size={25} />}</div><div><h3>{kind === "mod" ? (ar ? "استكشاف المودات" : "Explore mods") : (ar ? "استكشاف حزم المودات" : "Explore modpacks")}</h3><p>{ar ? "بحث مباشر في فهرس Modrinth الرسمي مع تنزيل الملفات المتوافقة إلى مجلد اللانشر." : "Search the official Modrinth index and download compatible files into the launcher folder."}</p></div></div>
+    {kind === "mod" && <div className="settings-actions"><button onClick={() => externalFileRef.current?.click()} disabled={busyId === "external"}><FileUp size={16}/>{ar ? "استيراد مود من الجهاز" : "Import mod from device"}</button><input ref={externalFileRef} type="file" accept=".jar,application/java-archive" hidden onChange={e => { void importExternal(e.target.files?.[0]); e.currentTarget.value = ""; }} /></div>}
     <div className="modrinth-filters">
       <label className="modrinth-search"><Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={ar ? "ابحث بالاسم..." : "Search by name..."} /><button onClick={() => void search()} aria-label={ar ? "بحث" : "Search"}><RefreshCw size={16} /></button></label>
       <div className="modrinth-filter-row"><label><span>{ar ? "إصدار اللعبة" : "Game version"}</span><input value={gameVersion} onChange={e => setGameVersion(e.target.value)} placeholder="1.21.11" /></label>{kind === "mod" && <label><span>{ar ? "المشغل" : "Loader"}</span><select value={loader} onChange={e => setLoader(e.target.value)}><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="quilt">Quilt</option><option value="any">{ar ? "الكل" : "Any"}</option></select></label>}</div>
