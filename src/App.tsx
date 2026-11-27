@@ -92,6 +92,10 @@ export default function App() {
 
           {activeTab === "versions" ? (
             <VersionCatalog lang={lang} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />
+          ) : activeTab === "accounts" ? (
+            <AccountsPanel lang={lang} />
+          ) : activeTab === "settings" ? (
+            <SettingsPanel lang={lang} />
           ) : activeTab === "home" ? (
             <div className="home-layout">
               <section className="welcome-card">
