@@ -500,15 +500,29 @@ fn import_external_mod(filename: String, data_base64: String) -> Result<String, 
 
 #[tauri::command]
 fn read_game_log() -> Result<String, String> {
-    let path = launcher_data_dir()?.join("game").join("logs").join("latest.log");
-    if !path.exists() { return Ok(String::new()); }
-    let mut content = fs::read_to_string(&path).map_err(|e| format!("Could not read Minecraft log: {e}"))?;
-    if content.len() > 1_000_000 {
-        let mut start = content.len() - 1_000_000;
-        while !content.is_char_boundary(start) { start += 1; }
-        content = content[start..].to_string();
+    let game_dir = launcher_data_dir()?.join("game");
+    let mut combined = String::new();
+    for (label, path) in [
+        ("Minecraft latest.log", game_dir.join("logs").join("latest.log")),
+        ("DRAGON console output", game_dir.join("logs").join("dragon-console.log"))
+    ] {
+        if path.exists() {
+            let content = fs::read_to_string(&path).map_err(|e| format!("Could not read {}: {e}", path.display()))?;
+            if !content.is_empty() {
+                combined.push_str("\n===== ");
+                combined.push_str(label);
+                combined.push_str(" =====\n");
+                combined.push_str(&content);
+                combined.push('\n');
+            }
+        }
     }
-    Ok(content)
+    if combined.len() > 1_000_000 {
+        let mut start = combined.len() - 1_000_000;
+        while !combined.is_char_boundary(start) { start += 1; }
+        combined = combined[start..].to_string();
+    }
+    Ok(combined)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
