@@ -28,8 +28,8 @@ export default function AccountsPanel({ lang }: { lang: Language }) {
 
   const createAccount = () => {
     const name = username.trim();
-    if (!/^[A-Za-z0-9_]{3,16}$/.test(name)) {
-      setError(ar ? "الاسم يجب أن يتكون من 3 إلى 16 حرفاً أو رقماً أو _." : "Use 3–16 letters, numbers or underscores.");
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(name)) {
+      setError(ar ? "الاسم يجب أن يتكون من 1 إلى 16 حرفاً أو رقماً أو _." : "Use 1–16 letters, numbers or underscores.");
       return;
     }
     if (accounts.some(a => a.username.toLowerCase() === name.toLowerCase())) {
