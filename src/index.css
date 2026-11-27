@@ -244,3 +244,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .modrinth-filter-row label { flex: 1; justify-content: space-between; }
   .modrinth-filter-row input, .modrinth-filter-row select { width: 120px; }
 }
+
+/* Keybind editor and live game output */
+.macro-action { align-items: end; margin-top: 10px; }
+.macro-action label { display: flex; flex-direction: column; gap: 7px; color: #aeb7c8; font-size: 10px; }
+.macro-action .account-remove { margin-bottom: 2px; }
+.game-log-view { max-height: 520px; min-height: 220px; overflow: auto; margin: 12px 0 0; padding: 14px; color: #b9c5d8; border: 1px solid #30384a; border-radius: 10px; background: #080b12; white-space: pre-wrap; overflow-wrap: anywhere; font: 10px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; direction: ltr; text-align: left; }
+.settings-actions button:disabled { opacity: .55; }
+@media (max-width: 600px) { .macro-action { grid-template-columns: 1fr 1fr auto; } .game-log-view { max-height: 380px; font-size: 9px; } }
