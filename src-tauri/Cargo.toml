@@ -1,0 +1,19 @@
+[package]
+name = "dragon-launcher"
+version = "0.1.0"
+description = "DRAGON Minecraft Launcher"
+authors = ["DRAGON Launcher Team"]
+edition = "2021"
+
+[lib]
+name = "dragon_launcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+sysinfo = "0.30"
+dirs = "5"
