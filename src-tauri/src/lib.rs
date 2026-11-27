@@ -379,7 +379,10 @@ fn launch_minecraft(
         for item in items { collect_argument_values(item, &mut jvm_args); }
     }
     for arg in &mut jvm_args { *arg = substitute(arg); }
-    if !jvm_args.iter().any(|arg| arg == "-cp" || arg == "-classpath" || arg.contains("\${classpath}")) {
+    if !jvm_args.iter().any(|arg| arg.starts_with("-Djava.library.path=")) {
+        jvm_args.push(format!("-Djava.library.path={}", natives_dir.to_string_lossy()));
+    }
+    if !jvm_args.iter().any(|arg| arg == "-cp" || arg == "-classpath") {
         jvm_args.push("-cp".to_string());
         jvm_args.push(classpath);
     }
