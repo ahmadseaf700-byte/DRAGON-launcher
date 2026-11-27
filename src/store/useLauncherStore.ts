@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Language } from "../locales/translations";
 
-export type TabType = "home" | "versions" | "mods" | "modpacks" | "news" | "accounts" | "keybinds" | "settings" | "servers" | "dragonHost";
+export type TabType = "home" | "instances" | "versions" | "mods" | "modpacks" | "news" | "accounts" | "keybinds" | "settings" | "servers" | "dragonHost";
 
 interface LauncherState {
   lang: Language;

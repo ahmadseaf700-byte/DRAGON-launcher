@@ -413,7 +413,8 @@ fn launch_minecraft(
     version_id: String,
     player_name: String,
     player_uuid: String,
-    ram_mb: u64
+    ram_mb: u64,
+    instance_id: Option<String>
 ) -> Result<LaunchResult, String> {
     if std::env::consts::OS == "android" {
         return Err("تشغيل Minecraft Java مباشرة على Android غير مدعوم بهذا البناء؛ يلزم Runtime وطبقة توافق Android مخصصة.".to_string());
@@ -466,8 +467,25 @@ fn launch_minecraft(
             return Err(format!("هذا الإصدار يحتاج Java {required} أو أحدث، بينما المثبّت هو Java {java_major}."));
         }
     }
-    let game_dir = config.get("game_directory").and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| root.clone());
+    let game_dir = if let Some(id) = instance_id {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let instance_dir = launcher_data_dir()?.join("instances").join(&id);
+        let metadata: Value = serde_json::from_slice(&fs::read(instance_dir.join("instance.json"))
+            .map_err(|_| "النسخة المحددة لم تعد موجودة. حدّث قائمة النسخ.".to_string())?)
+            .map_err(|e| format!("Invalid instance metadata: {e}"))?;
+        if metadata.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+            return Err("Instance identity verification failed".to_string());
+        }
+        if metadata.get("version_id").and_then(Value::as_str) != Some(version_id.as_str()) {
+            return Err("إصدار النسخة المحددة لا يطابق إصدار التشغيل.".to_string());
+        }
+        instance_dir
+    } else {
+        config.get("game_directory").and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| root.clone())
+    };
     fs::create_dir_all(&game_dir).map_err(|e| format!("Could not create game directory: {e}"))?;
 
     let mut classpath_entries: Vec<String> = Vec::new();
@@ -561,6 +579,124 @@ fn launch_minecraft(
     let mut processes = game_processes().lock().map_err(|_| "تعذر تسجيل عملية Minecraft.".to_string())?;
     processes.insert(pid, child);
     Ok(LaunchResult { pid, log_file: log_path.to_string_lossy().into_owned(), java_executable: java_path.to_string() })
+}
+
+
+#[tauri::command]
+fn list_game_instances() -> Result<Vec<Value>, String> {
+    let root = launcher_data_dir()?.join("instances");
+    fs::create_dir_all(&root).map_err(|e| format!("Could not create instances directory: {e}"))?;
+    let mut instances = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|e| format!("Could not read instances: {e}"))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_dir() { continue; }
+        let metadata = entry.path().join("instance.json");
+        if !metadata.is_file() { continue; }
+        let value: Value = serde_json::from_slice(&fs::read(metadata).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Invalid instance metadata: {e}"))?;
+        instances.push(value);
+    }
+    instances.sort_by(|a, b| a.get("created_at").and_then(Value::as_u64).cmp(&b.get("created_at").and_then(Value::as_u64)));
+    instances.reverse();
+    Ok(instances)
+}
+
+#[tauri::command]
+fn create_game_instance(name: String, version_id: String) -> Result<Value, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 40 || name.chars().any(|c| c.is_control()) {
+        return Err("اسم النسخة يجب أن يكون بين 1 و40 حرفاً.".to_string());
+    }
+    if version_id.is_empty() || version_id.len() > 64
+        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err("Invalid Minecraft version identifier".to_string());
+    }
+    let root = launcher_data_dir()?.join("instances");
+    fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+    let created_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| e.to_string())?.as_millis() as u64;
+    let digest = md5::compute(format!("{name}:{version_id}:{created_at}"));
+    let digest_hex = digest.0.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let id = format!("{created_at}-{digest_hex}");
+    let instance_dir = root.join(&id);
+    fs::create_dir_all(&instance_dir).map_err(|e| e.to_string())?;
+    for folder in ["mods", "config", "resourcepacks", "shaderpacks", "saves", "screenshots", "logs", "crash-reports"] {
+        fs::create_dir_all(instance_dir.join(folder)).map_err(|e| e.to_string())?;
+    }
+    let value = json!({
+        "id": id,
+        "name": name,
+        "version_id": version_id,
+        "created_at": created_at,
+        "game_directory": instance_dir.to_string_lossy()
+    });
+    let bytes = serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?;
+    let temporary = instance_dir.join("instance.json.tmp");
+    fs::write(&temporary, bytes).map_err(|e| e.to_string())?;
+    fs::rename(temporary, instance_dir.join("instance.json")).map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
+#[tauri::command]
+fn delete_game_instance(instance_id: String) -> Result<(), String> {
+    if instance_id.is_empty() || instance_id.len() > 100
+        || !instance_id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+        return Err("Invalid instance identifier".to_string());
+    }
+    let root = launcher_data_dir()?.join("instances");
+    let target = root.join(&instance_id);
+    if !target.exists() { return Err("النسخة المطلوبة غير موجودة.".to_string()); }
+    let metadata: Value = serde_json::from_slice(&fs::read(target.join("instance.json"))
+        .map_err(|e| format!("Cannot verify instance metadata: {e}"))?)
+        .map_err(|e| format!("Invalid instance metadata: {e}"))?;
+    if metadata.get("id").and_then(Value::as_str) != Some(instance_id.as_str()) {
+        return Err("Instance identity verification failed".to_string());
+    }
+    fs::remove_dir_all(target).map_err(|e| format!("Could not delete instance: {e}"))
+}
+
+
+#[tauri::command]
+fn rename_game_instance(instance_id: String, name: String) -> Result<Value, String> {
+    if instance_id.is_empty() || instance_id.len() > 100 || !instance_id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) { return Err("Invalid instance identifier".to_string()); }
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 40 || name.chars().any(|c| c.is_control()) {
+        return Err("اسم النسخة يجب أن يكون بين 1 و40 حرفاً.".to_string());
+    }
+    let root = launcher_data_dir()?.join("instances");
+    let target = root.join(&instance_id);
+    if !target.join("instance.json").is_file() { return Err("النسخة المطلوبة غير موجودة.".to_string()); }
+    let mut value: Value = serde_json::from_slice(&fs::read(target.join("instance.json")).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    if value.get("id").and_then(Value::as_str) != Some(instance_id.as_str()) {
+        return Err("Instance identity verification failed".to_string());
+    }
+    value["name"] = Value::String(name.to_string());
+    let temp = target.join("instance.json.tmp");
+    fs::write(&temp, serde_json::to_vec_pretty(&value).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    fs::rename(temp, target.join("instance.json")).map_err(|e| e.to_string())?;
+    Ok(value)
+}
+
+#[tauri::command]
+fn open_instance_folder(instance_id: String, folder: String) -> Result<(), String> {
+    if instance_id.is_empty() || instance_id.len() > 100 || !instance_id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) { return Err("Invalid instance identifier".to_string()); }
+    let allowed = ["", "mods", "config", "resourcepacks", "shaderpacks", "saves", "screenshots", "logs", "crash-reports"];
+    if !allowed.contains(&folder.as_str()) { return Err("Invalid instance folder".to_string()); }
+    let target = launcher_data_dir()?.join("instances").join(&instance_id);
+    if !target.join("instance.json").is_file() { return Err("النسخة المطلوبة غير موجودة.".to_string()); }
+    let path = if folder.is_empty() { target } else { target.join(folder) };
+    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "windows")]
+    let result = Command::new("explorer").arg(&path).spawn();
+    #[cfg(target_os = "macos")]
+    let result = Command::new("open").arg(&path).spawn();
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
+    let result = Command::new("xdg-open").arg(&path).spawn();
+    #[cfg(target_os = "android")]
+    return Err("فتح مجلدات النسخ من واجهة Android غير متاح في هذا البناء.".to_string());
+    #[cfg(not(target_os = "android"))]
+    result.map(|_| ()).map_err(|e| format!("تعذر فتح المجلد: {e}"))
 }
 
 #[tauri::command]
@@ -849,7 +985,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
