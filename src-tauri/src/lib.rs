@@ -65,27 +65,81 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
             return Ok(fs::metadata(destination).map(|m| m.len()).unwrap_or(0));
         }
     }
+
     let url = allowed_mojang_url(url)?;
-    let response = client.get(url).send().await.map_err(|e| format!("Download failed: {e}"))?;
-    if !response.status().is_success() { return Err(format!("Download server returned HTTP {}", response.status())); }
-    let bytes = response.bytes().await.map_err(|e| format!("Could not read download: {e}"))?;
-    if bytes.is_empty() { return Err("Server returned an empty file".to_string()); }
-    if let Some(expected) = expected_sha1 {
-        let actual = format!("{:x}", Sha1::digest(&bytes));
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(format!("SHA-1 verification failed for {}", destination.display()));
-        }
-    }
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Could not create download directory: {e}"))?;
     }
     let temporary = destination.with_extension("dragon-download.tmp");
-    fs::write(&temporary, &bytes).map_err(|e| format!("Could not write download: {e}"))?;
-    if destination.exists() {
-        fs::remove_file(destination).map_err(|e| format!("Could not replace cached file: {e}"))?;
+    let mut last_error = String::from("Download failed");
+
+    // Stream in bounded chunks instead of buffering an entire JAR/asset in memory.
+    // A transient connection/body-decoding failure gets a clean retry.
+    for attempt in 1..=3 {
+        let result: Result<u64, String> = async {
+            let response = client.get(url.clone()).send().await
+                .map_err(|e| format!("Request failed: {e}"))?;
+            if !response.status().is_success() {
+                return Err(format!("Download server returned HTTP {}", response.status()));
+            }
+            let expected_length = response.content_length();
+            let mut response = response;
+            let mut output = fs::File::create(&temporary)
+                .map_err(|e| format!("Could not create temporary download: {e}"))?;
+            let mut hasher = Sha1::new();
+            let mut downloaded = 0u64;
+
+            loop {
+                let chunk = response.chunk().await
+                    .map_err(|e| format!("Could not read download stream: {e}"))?;
+                let Some(chunk) = chunk else { break; };
+                if chunk.is_empty() { continue; }
+                output.write_all(&chunk)
+                    .map_err(|e| format!("Could not write download: {e}"))?;
+                hasher.update(&chunk);
+                downloaded += chunk.len() as u64;
+            }
+
+            output.flush().map_err(|e| format!("Could not flush download: {e}"))?;
+            output.sync_all().map_err(|e| format!("Could not sync download: {e}"))?;
+            drop(output);
+
+            if downloaded == 0 {
+                return Err("Server returned an empty file".to_string());
+            }
+            if let Some(length) = expected_length {
+                if downloaded != length {
+                    return Err(format!("Incomplete download: received {downloaded} of {length} bytes"));
+                }
+            }
+            if let Some(expected) = expected_sha1 {
+                let actual = format!("{:x}", hasher.finalize());
+                if !actual.eq_ignore_ascii_case(expected) {
+                    return Err(format!("SHA-1 verification failed for {}", destination.display()));
+                }
+            }
+
+            if destination.exists() {
+                fs::remove_file(destination).map_err(|e| format!("Could not replace cached file: {e}"))?;
+            }
+            fs::rename(&temporary, destination)
+                .map_err(|e| format!("Could not finalize download: {e}"))?;
+            Ok(downloaded)
+        }.await;
+
+        match result {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => {
+                last_error = error;
+                let _ = fs::remove_file(&temporary);
+                if attempt < 3 {
+                    tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
+                }
+            }
+        }
     }
-    fs::rename(&temporary, destination).map_err(|e| format!("Could not finalize download: {e}"))?;
-    Ok(bytes.len() as u64)
+
+    Err(format!("Download failed after 3 attempts: {last_error}"))
 }
 
 fn library_allowed(library: &Value) -> bool {
