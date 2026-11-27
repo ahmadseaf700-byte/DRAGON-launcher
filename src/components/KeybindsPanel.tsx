@@ -51,7 +51,7 @@ export default function KeybindsPanel({ lang }: { lang: Language }) {
           const match = line.match(/^(key_key\.[^:]+):(.+)$/);
           if (!match) return [];
           const id = match[1].replace("key_key.", "");
-          return [{ name: id.replaceAll("_", " "), key: match[2].trim().replace("key.keyboard.", "").replace("key.mouse.", "MOUSE_"), actions: [{ type: "press_key", value: match[2].trim() }] }];
+          return [{ name: id.replace(/_/g, " "), key: match[2].trim().replace("key.keyboard.", "").replace("key.mouse.", "MOUSE_"), actions: [{ type: "press_key", value: match[2].trim() }] }];
         });
       } else {
         const parsed = JSON.parse(fileText);
