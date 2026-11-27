@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
   Blocks, Cpu, Download, Flame, Gamepad2, Globe2, Home,
-  Layers3, Newspaper, Play, Server, Settings, UserRound, Keyboard, type LucideIcon
+  Layers3, Newspaper, Play, Square, Server, Settings, UserRound, Keyboard, type LucideIcon
 } from "lucide-react";
 import { useLauncherStore, type TabType } from "./store/useLauncherStore";
 import { translations } from "./locales/translations";
@@ -30,6 +30,8 @@ export default function App() {
   const [launchError, setLaunchError] = useState("");
   const [versionInstalled, setVersionInstalled] = useState(false);
   const [checkingVersion, setCheckingVersion] = useState(false);
+  const [activeGamePid, setActiveGamePid] = useState<number | null>(null);
+  const [stoppingGame, setStoppingGame] = useState(false);
   const native = isTauri();
 
   useEffect(() => {
@@ -53,6 +55,50 @@ export default function App() {
       .finally(() => { if (!cancelled) setCheckingVersion(false); });
     return () => { cancelled = true; };
   }, [native, selectedVersion]);
+
+  useEffect(() => {
+    if (!native || activeGamePid === null) return;
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const status = await invoke<{ pid: number; running: boolean; exit_code: number | null }>(
+          "get_game_process_status", { pid: activeGamePid }
+        );
+        if (!cancelled && !status.running) {
+          setActiveGamePid(null);
+          setLaunchMessage(lang === "ar"
+            ? "انتهت جلسة Minecraft" + (status.exit_code === null ? "." : " (رمز الخروج: " + status.exit_code + ").")
+            : "Minecraft session ended" + (status.exit_code === null ? "." : " (exit code: " + status.exit_code + ")."));
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setLaunchError(lang === "ar" ? "تعذر تحديث حالة اللعبة: " + String(error) : "Could not refresh game status: " + String(error));
+        }
+      }
+    };
+    void check();
+    const timer = window.setInterval(() => void check(), 2000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [native, activeGamePid, lang]);
+
+  const handleStopGame = async () => {
+    if (activeGamePid === null || stoppingGame) return;
+    setStoppingGame(true);
+    setLaunchError("");
+    try {
+      const result = await invoke<{ pid: number; running: boolean; exit_code: number | null }>(
+        "stop_game_process", { pid: activeGamePid }
+      );
+      setActiveGamePid(null);
+      setLaunchMessage(lang === "ar"
+        ? (result.running ? "ما زالت اللعبة تعمل." : "تم إيقاف Minecraft.")
+        : (result.running ? "The game is still running." : "Minecraft was stopped."));
+    } catch (error) {
+      setLaunchError(String(error));
+    } finally {
+      setStoppingGame(false);
+    }
+  };
 
   const navItems = useMemo<{ id: TabType; label: string; icon: LucideIcon }[]>(() => [
     { id: "home", label: t.home, icon: Home },
@@ -89,9 +135,10 @@ export default function App() {
       const result = await invoke<{ pid: number; log_file: string; java_executable: string }>("launch_minecraft", {
         versionId: selectedVersion, playerName: account.username, playerUuid: account.uuid, ramMb: ramMB
       });
+      setActiveGamePid(result.pid);
       setLaunchMessage(lang === "ar"
-        ? "تم إرسال اللعبة إلى Java. رقم العملية: " + result.pid + " — سجل التشغيل: " + result.log_file
-        : "Minecraft was started by Java. Process: " + result.pid + " — output: " + result.log_file);
+        ? "بدأت Minecraft. رقم العملية: " + result.pid + " — سجل التشغيل: " + result.log_file
+        : "Minecraft started. Process: " + result.pid + " — output: " + result.log_file);
     } catch (error) {
       setLaunchError(String(error));
     } finally { setLaunching(false); }
@@ -206,8 +253,14 @@ export default function App() {
           {(launchMessage || launchError) && <div className={"launch-feedback " + (launchError ? "is-error" : "is-success")} role="status">{launchError || launchMessage}</div>}
           <footer className="play-dock">
             <div className="dock-game-icon"><Gamepad2 size={23} /></div>
-            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{!selectedVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + selectedVersion : t.notInstalled + " · " + selectedVersion}</span></div>
-            <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
+            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{activeGamePid !== null ? (lang === "ar" ? "اللعبة تعمل · PID " : "Running · PID ") + activeGamePid : !selectedVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + selectedVersion : t.notInstalled + " · " + selectedVersion}</span></div>
+            {activeGamePid !== null ? (
+              <button className="play-button" onClick={() => void handleStopGame()} disabled={stoppingGame} title={lang === "ar" ? "إيقاف عملية Minecraft التي بدأها اللانشر" : "Stop the Minecraft process launched by DRAGON"}>
+                <Square size={16} fill="currentColor" />{stoppingGame ? (lang === "ar" ? "جارٍ الإيقاف..." : "Stopping...") : (lang === "ar" ? "إيقاف" : "Stop")}
+              </button>
+            ) : (
+              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
+            )}
           </footer>
           <p className="footer-note">DRAGON LAUNCHER <span>•</span> BUILT FOR YOUR WORLDS</p>
         </div>
