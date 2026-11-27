@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
+import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import {
   Blocks, Cpu, Download, Flame, Gamepad2, Globe2, Home,
   Layers3, Newspaper, Play, Square, Server, Settings, UserRound, Keyboard, type LucideIcon
@@ -37,7 +39,35 @@ export default function App() {
   const [selectedInstance, setSelectedInstance] = useState<GameInstance | null>(() => { try { const raw = localStorage.getItem("dragon.activeInstance"); return raw ? JSON.parse(raw) as GameInstance : null; } catch { return null; } });
   const effectiveVersion = selectedInstance?.version_id || selectedVersion;
   const [stoppingGame, setStoppingGame] = useState(false);
+  const [playWizardOpen, setPlayWizardOpen] = useState(false);
+  const [playInstanceName, setPlayInstanceName] = useState(selectedInstance?.name || "Survival");
+  const [playVersion, setPlayVersion] = useState(selectedInstance?.version_id || selectedVersion || "1.21.11");
+  const [playDownloadBusy, setPlayDownloadBusy] = useState(false);
+  const [playDownloadReady, setPlayDownloadReady] = useState(false);
+  const [playProgress, setPlayProgress] = useState<{ stage: string; done: number; total: number } | null>(null);
+
   const native = isTauri();
+
+  // Reconcile the saved selection against the native instance registry on every app start.
+  // This prevents stale localStorage data from pointing Play at a deleted or changed instance.
+  useEffect(() => {
+    if (!native) return;
+    let cancelled = false;
+    invoke<GameInstance[]>("list_game_instances")
+      .then(instances => {
+        if (cancelled) return;
+        const savedId = selectedInstance?.id;
+        const current = savedId ? instances.find(instance => instance.id === savedId) ?? null : null;
+        setSelectedInstance(current);
+        if (current) localStorage.setItem("dragon.activeInstance", JSON.stringify(current));
+        else localStorage.removeItem("dragon.activeInstance");
+      })
+      .catch(error => {
+        // Keep the last saved selection if the registry cannot be read temporarily.
+        console.error("Could not reconcile saved Minecraft instance:", error);
+      });
+    return () => { cancelled = true; };
+  }, [native]);
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -47,6 +77,20 @@ export default function App() {
   useEffect(() => {
     if (!native) return;
     invoke<SystemEnv>("get_system_environment").then(setSystem).catch(() => setSystemError(true));
+  }, [native]);
+
+  // Keep the in-app progress display updated without sending notifications for each file.
+  // A single notification is sent only after the full installation succeeds.
+  useEffect(() => {
+    if (!native) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void listen<{ version: string; stage: string; done: number; total: number }>("minecraft-install-progress", event => {
+      const p = event.payload;
+      if (p.stage === "complete") return;
+      setPlayProgress({ stage: p.stage, done: p.done, total: p.total });
+    }).then(fn => { if (cancelled) fn(); else unlisten = fn; });
+    return () => { cancelled = true; unlisten?.(); };
   }, [native]);
 
 
@@ -109,7 +153,7 @@ export default function App() {
     { id: "home", label: t.home, icon: Home },
     { id: "versions", label: t.versions, icon: Layers3 },
     { id: "instances", label: lang === "ar" ? "نسخ اللعبة" : "Instances", icon: Gamepad2 },
-    { id: "mods", label: t.library, icon: Blocks },
+    { id: "mods", label: lang === "ar" ? "مكتبة المودات" : "Mods Library", icon: Blocks },
     { id: "news", label: t.news, icon: Newspaper },
     { id: "accounts", label: t.accounts, icon: UserRound },
     { id: "keybinds", label: lang === "ar" ? "الأزرار" : "Keybinds", icon: Keyboard },
@@ -126,7 +170,7 @@ export default function App() {
   const currentLabel = navItems.find(item => item.id === activeTab)?.label ?? t.home;
   const maxRam = system ? Math.max(1024, Math.min(16384, system.total_ram_mb - 1024)) : 8192;
 
-  const handlePlay = async () => {
+  const launchSelectedGame = async () => {
     setLaunchError(""); setLaunchMessage("");
     if (!native) { setLaunchError(lang === "ar" ? "شغّل نسخة التطبيق المثبتة لتشغيل Minecraft." : "Run the installed desktop app to launch Minecraft."); return; }
     if (!effectiveVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
@@ -148,6 +192,36 @@ export default function App() {
     } catch (error) {
       setLaunchError(String(error));
     } finally { setLaunching(false); }
+  };
+
+  const handlePlay = () => {
+    setPlayInstanceName(selectedInstance?.name || "Survival");
+    setPlayVersion(selectedInstance?.version_id || selectedVersion || "1.21.11");
+    setPlayDownloadReady(false); setPlayProgress(null); setPlayWizardOpen(true);
+    setLaunchError(""); setLaunchMessage("");
+  };
+
+  const startPlayDownload = async () => {
+    if (!native || playDownloadBusy) return;
+    if (!playInstanceName.trim() || !playVersion.trim()) { setLaunchError(lang === "ar" ? "أدخل اسم النسخة وحدد إصدار Minecraft." : "Enter an instance name and Minecraft version."); return; }
+    setPlayDownloadBusy(true); setPlayDownloadReady(false); setPlayProgress({ stage: "prepare", done: 0, total: 1 });
+    setLaunchError(""); setLaunchMessage("");
+    try {
+      let granted = await isPermissionGranted();
+      if (!granted) granted = (await requestPermission()) === "granted";
+      if (!granted) throw new Error(lang === "ar" ? "اسمح بالإشعارات لتلقي تنبيه عند اكتمال التنزيل." : "Allow notifications to be alerted when the download completes.");
+      const installed = await invoke<boolean>("is_minecraft_version_installed", { versionId: playVersion.trim() });
+      if (!installed) await invoke("install_minecraft_version", { versionId: playVersion.trim() });
+      const instance = await invoke<GameInstance>("create_game_instance", { name: playInstanceName.trim(), versionId: playVersion.trim() });
+      setSelectedInstance(instance); localStorage.setItem("dragon.activeInstance", JSON.stringify(instance));
+      setSelectedVersion(playVersion.trim()); setVersionInstalled(true);
+      setPlayDownloadReady(true); setPlayProgress({ stage: "complete", done: 1, total: 1 });
+      setLaunchMessage(lang === "ar" ? "اكتمل التنزيل وأصبحت النسخة جاهزة." : "Download complete. Your instance is ready.");
+      await sendNotification({ id: 7311, title: "DRAGON Launcher", body: lang === "ar" ? `اكتمل تنزيل Minecraft ${playVersion} وإنشاء ${playInstanceName}.` : `Minecraft ${playVersion} and ${playInstanceName} are ready.`, ongoing: false, autoCancel: true });
+    } catch (error) {
+      setLaunchError(String(error));
+      try { await sendNotification({ id: 7311, title: "DRAGON Launcher", body: lang === "ar" ? "تعذر إكمال التنزيل: " + String(error) : "Download failed: " + String(error), ongoing: false }); } catch { /* permission denied */ }
+    } finally { setPlayDownloadBusy(false); }
   };
 
   return (
@@ -192,7 +266,7 @@ export default function App() {
            ) : activeTab === "instances" ? (
             <InstancesPanel lang={lang} selectedId={selectedInstance?.id ?? null} onSelect={(item) => { setSelectedInstance(item); if (item) localStorage.setItem("dragon.activeInstance", JSON.stringify(item)); else localStorage.removeItem("dragon.activeInstance"); setLaunchMessage(item ? (lang === "ar" ? `النسخة المحددة: ${item.name}` : `Selected instance: ${item.name}`) : ""); }} />
           ) : activeTab === "mods" ? (
-            <LibraryCatalog lang={lang} />
+            <LibraryCatalog lang={lang} instanceId={selectedInstance?.id ?? null} />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
           ) : activeTab === "keybinds" ? (
@@ -259,15 +333,25 @@ export default function App() {
             </section>
           )}
           {(launchMessage || launchError) && <div className={"launch-feedback " + (launchError ? "is-error" : "is-success")} role="status">{launchError || launchMessage}</div>}
+          {playWizardOpen && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true" aria-labelledby="play-wizard-title">
+            <section className="w-full max-w-lg rounded-2xl border border-dragon-border bg-dragon-panel p-5 shadow-2xl">
+              <div className="mb-4 flex items-center justify-between gap-3"><div><p className="eyebrow">DRAGON QUICK PLAY</p><h3 id="play-wizard-title" className="text-xl font-bold">{lang === "ar" ? "تجهيز نسخة للعب" : "Prepare an instance to play"}</h3></div><button onClick={() => !playDownloadBusy && setPlayWizardOpen(false)} disabled={playDownloadBusy} className="rounded-lg border border-dragon-border px-3 py-2 text-sm disabled:opacity-40">{lang === "ar" ? "إغلاق" : "Close"}</button></div>
+              <label className="mb-3 block text-sm"><span className="mb-2 block text-slate-300">{lang === "ar" ? "إصدار Minecraft" : "Minecraft version"}</span><input value={playVersion} onChange={e => setPlayVersion(e.target.value)} disabled={playDownloadBusy || playDownloadReady} placeholder="1.21.11" className="w-full rounded-xl border border-dragon-border bg-dragon-dark px-3 py-3 outline-none focus:border-dragon-accent" /></label>
+              <label className="mb-4 block text-sm"><span className="mb-2 block text-slate-300">{lang === "ar" ? "اسم الـ Instance" : "Instance name"}</span><input value={playInstanceName} onChange={e => setPlayInstanceName(e.target.value)} maxLength={40} disabled={playDownloadBusy || playDownloadReady} placeholder="Survival" className="w-full rounded-xl border border-dragon-border bg-dragon-dark px-3 py-3 outline-none focus:border-dragon-accent" /></label>
+              {playDownloadBusy && <div className="mb-4 rounded-xl border border-dragon-border bg-dragon-dark p-4"><div className="mb-2 flex justify-between text-sm"><strong>{lang === "ar" ? "جارٍ تنزيل ملفات اللعبة" : "Downloading game files"}</strong><span className="font-mono text-emerald-300">{playProgress?.total ? Math.floor(playProgress.done / playProgress.total * 100) : 0}%</span></div><div className="h-3 overflow-hidden rounded-full bg-slate-700"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: (playProgress?.total ? Math.min(100, playProgress.done / playProgress.total * 100) : 0) + "%" }} /></div><p className="mt-2 text-xs text-slate-400">{playProgress ? `${playProgress.stage} — ${playProgress.done}/${playProgress.total}` : (lang === "ar" ? "جارٍ التحضير..." : "Preparing...")}</p></div>}
+              {playDownloadReady ? <div className="space-y-3"><p className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{lang === "ar" ? "اكتمل التنزيل وتم إنشاء النسخة. يمكنك بدء اللعب." : "Download complete and instance created. You can start playing."}</p><button onClick={() => { setPlayWizardOpen(false); void launchSelectedGame(); }} className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 font-bold text-white"><Play size={17} fill="currentColor" />{lang === "ar" ? "ابدأ اللعب" : "Start playing"}</button></div> : <button onClick={() => void startPlayDownload()} disabled={playDownloadBusy || !playVersion.trim() || !playInstanceName.trim()} className="flex w-full items-center justify-center gap-2 rounded-xl bg-dragon-accent px-4 py-3 font-bold text-white disabled:opacity-50"><Download size={17} />{playDownloadBusy ? (lang === "ar" ? "جارٍ التنزيل..." : "Downloading...") : (lang === "ar" ? "إنشاء النسخة وبدء التنزيل" : "Create instance & download")}</button>}
+              <p className="mt-3 text-xs leading-5 text-slate-500">{lang === "ar" ? "سيُطلب إذن الإشعارات لتحديث تقدم التنزيل. أبقِ التطبيق مفتوحاً حالياً؛ خدمة Android الأمامية المضمونة لم تُضف بعد." : "Notification permission is requested for progress updates. Keep the app open for now; a dedicated Android foreground service is not included yet."}</p>
+            </section>
+          </div>}
           <footer className="play-dock">
             <div className="dock-game-icon"><Gamepad2 size={23} /></div>
-            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{activeGamePid !== null ? (lang === "ar" ? "اللعبة تعمل · PID " : "Running · PID ") + activeGamePid : !selectedVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + selectedVersion : t.notInstalled + " · " + selectedVersion}</span></div>
+            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{activeGamePid !== null ? (lang === "ar" ? "اللعبة تعمل · PID " : "Running · PID ") + activeGamePid : !effectiveVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + effectiveVersion : t.notInstalled + " · " + effectiveVersion}</span></div>
             {activeGamePid !== null ? (
               <button className="play-button" onClick={() => void handleStopGame()} disabled={stoppingGame} title={lang === "ar" ? "إيقاف عملية Minecraft التي بدأها اللانشر" : "Stop the Minecraft process launched by DRAGON"}>
                 <Square size={16} fill="currentColor" />{stoppingGame ? (lang === "ar" ? "جارٍ الإيقاف..." : "Stopping...") : (lang === "ar" ? "إيقاف" : "Stop")}
               </button>
             ) : (
-              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
+              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !native} title={!native ? (lang === "ar" ? "يتطلب التطبيق المثبت" : "Installed app required") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
             )}
           </footer>
           <p className="footer-note">DRAGON LAUNCHER <span>•</span> BUILT FOR YOUR WORLDS</p>

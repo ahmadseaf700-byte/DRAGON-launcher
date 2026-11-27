@@ -30,7 +30,14 @@ export default function InstancesPanel({ lang, selectedId, onSelect }: { lang: L
     if (!native) { setError(ar ? "إنشاء النسخ يحتاج التطبيق المثبت." : "Creating instances requires the installed app."); return; }
     setBusy("create"); setError(""); setNotice("");
     try {
-      const item = await invoke<GameInstance>("create_game_instance", { name, versionId: version });
+      const ready = await invoke<boolean>("is_minecraft_version_installed", { versionId: version.trim() });
+      if (!ready) {
+        setError(ar
+          ? `لا يمكن إنشاء النسخة الآن: الإصدار ${version.trim()} غير مثبت بالكامل. افتح صفحة «الإصدارات» ونزّله حتى يصل التقدم إلى 100٪.`
+          : `Cannot create this instance yet: Minecraft ${version.trim()} is not fully installed. Open Versions and finish the download to 100%.`);
+        return;
+      }
+      const item = await invoke<GameInstance>("create_game_instance", { name, versionId: version.trim() });
       setItems(current => [item, ...current]);
       setName("");
       setNotice(ar ? "تم إنشاء النسخة ومجلداتها المستقلة." : "Instance and its dedicated folders were created.");
@@ -45,6 +52,7 @@ export default function InstancesPanel({ lang, selectedId, onSelect }: { lang: L
     try {
       const updated = await invoke<GameInstance>("rename_game_instance", { instanceId: item.id, name: next.trim() });
       setItems(current => current.map(entry => entry.id === item.id ? updated : entry));
+      if (selectedId === item.id) onSelect(updated);
       setNotice(ar ? "تم تغيير اسم النسخة." : "Instance renamed.");
     } catch (e) { setError(String(e)); } finally { setBusy(""); }
   };
@@ -61,6 +69,7 @@ export default function InstancesPanel({ lang, selectedId, onSelect }: { lang: L
     try {
       await invoke("delete_game_instance", { instanceId: item.id });
       setItems(current => current.filter(entry => entry.id !== item.id));
+      if (selectedId === item.id) onSelect(null);
       setNotice(ar ? "تم حذف النسخة." : "Instance deleted.");
     } catch (e) { setError(String(e)); }
     finally { setBusy(""); }

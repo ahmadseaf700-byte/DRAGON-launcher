@@ -22,9 +22,17 @@ fn config_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
+// Tauri resolves the correct per-app data directory on desktop and Android.
+static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 fn launcher_data_dir() -> Result<PathBuf, String> {
-    let base = dirs::data_dir().ok_or_else(|| "Could not resolve application data directory".to_string())?;
-    let dir = base.join("DRAGONLauncher");
+    let dir = if let Some(path) = APP_DATA_DIR.get() {
+        path.clone()
+    } else {
+        // Fallback for contexts where the Tauri setup hook has not populated the path.
+        let base = dirs::data_dir().ok_or_else(|| "Could not resolve application data directory".to_string())?;
+        base.join("DRAGONLauncher")
+    };
     fs::create_dir_all(&dir).map_err(|error| format!("Could not create launcher data directory: {error}"))?;
     Ok(dir)
 }
@@ -42,7 +50,10 @@ fn allowed_mojang_url(raw: &str) -> Result<reqwest::Url, String> {
 
 async fn fetch_json(client: &reqwest::Client, url: &str) -> Result<Value, String> {
     let url = allowed_mojang_url(url)?;
-    let response = client.get(url).send().await.map_err(|e| format!("Metadata request failed: {e}"))?;
+    let response = client.get(url.clone()).send().await.map_err(|e| {
+        let kind = if e.is_timeout() { "timeout" } else if e.is_connect() { "connection/DNS/TLS" } else if e.is_request() { "request" } else { "network" };
+        format!("Metadata request failed ({kind}) for {}: {e}", url.host_str().unwrap_or("unknown host"))
+    })?;
     if !response.status().is_success() { return Err(format!("Metadata server returned HTTP {}", response.status())); }
     response.json::<Value>().await.map_err(|e| format!("Invalid Mojang JSON: {e}"))
 }
@@ -57,27 +68,84 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
             return Ok(fs::metadata(destination).map(|m| m.len()).unwrap_or(0));
         }
     }
+
     let url = allowed_mojang_url(url)?;
-    let response = client.get(url).send().await.map_err(|e| format!("Download failed: {e}"))?;
-    if !response.status().is_success() { return Err(format!("Download server returned HTTP {}", response.status())); }
-    let bytes = response.bytes().await.map_err(|e| format!("Could not read download: {e}"))?;
-    if bytes.is_empty() { return Err("Server returned an empty file".to_string()); }
-    if let Some(expected) = expected_sha1 {
-        let actual = format!("{:x}", Sha1::digest(&bytes));
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(format!("SHA-1 verification failed for {}", destination.display()));
-        }
-    }
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("Could not create download directory: {e}"))?;
     }
     let temporary = destination.with_extension("dragon-download.tmp");
-    fs::write(&temporary, &bytes).map_err(|e| format!("Could not write download: {e}"))?;
-    if destination.exists() {
-        fs::remove_file(destination).map_err(|e| format!("Could not replace cached file: {e}"))?;
+    let mut last_error = String::from("Download failed");
+
+    // Stream in bounded chunks instead of buffering an entire JAR/asset in memory.
+    // A transient connection/body-decoding failure gets a clean retry.
+    for attempt in 1..=3 {
+        let result: Result<u64, String> = async {
+            let response = client.get(url.clone()).send().await
+                .map_err(|e| {
+                    let kind = if e.is_timeout() { "timeout" } else if e.is_connect() { "connection/DNS/TLS" } else if e.is_request() { "request" } else { "network" };
+                    format!("Request failed ({kind}) for {}: {e}", url.host_str().unwrap_or("unknown host"))
+                })?;
+            if !response.status().is_success() {
+                return Err(format!("Download server returned HTTP {}", response.status()));
+            }
+            let expected_length = response.content_length();
+            let mut response = response;
+            let mut output = fs::File::create(&temporary)
+                .map_err(|e| format!("Could not create temporary download: {e}"))?;
+            let mut hasher = Sha1::new();
+            let mut downloaded = 0u64;
+
+            loop {
+                let chunk = response.chunk().await
+                    .map_err(|e| format!("Could not read download stream: {e}"))?;
+                let Some(chunk) = chunk else { break; };
+                if chunk.is_empty() { continue; }
+                output.write_all(&chunk)
+                    .map_err(|e| format!("Could not write download: {e}"))?;
+                hasher.update(&chunk);
+                downloaded += chunk.len() as u64;
+            }
+
+            output.flush().map_err(|e| format!("Could not flush download: {e}"))?;
+            output.sync_all().map_err(|e| format!("Could not sync download: {e}"))?;
+            drop(output);
+
+            if downloaded == 0 {
+                return Err("Server returned an empty file".to_string());
+            }
+            if let Some(length) = expected_length {
+                if downloaded != length {
+                    return Err(format!("Incomplete download: received {downloaded} of {length} bytes"));
+                }
+            }
+            if let Some(expected) = expected_sha1 {
+                let actual = format!("{:x}", hasher.finalize());
+                if !actual.eq_ignore_ascii_case(expected) {
+                    return Err(format!("SHA-1 verification failed for {}", destination.display()));
+                }
+            }
+
+            if destination.exists() {
+                fs::remove_file(destination).map_err(|e| format!("Could not replace cached file: {e}"))?;
+            }
+            fs::rename(&temporary, destination)
+                .map_err(|e| format!("Could not finalize download: {e}"))?;
+            Ok(downloaded)
+        }.await;
+
+        match result {
+            Ok(bytes) => return Ok(bytes),
+            Err(error) => {
+                last_error = error;
+                let _ = fs::remove_file(&temporary);
+                if attempt < 3 {
+                    std::thread::sleep(Duration::from_millis(500 * attempt as u64));
+                }
+            }
+        }
     }
-    fs::rename(&temporary, destination).map_err(|e| format!("Could not finalize download: {e}"))?;
-    Ok(bytes.len() as u64)
+
+    Err(format!("Download failed after 3 attempts: {last_error}"))
 }
 
 fn library_allowed(library: &Value) -> bool {
@@ -230,7 +298,12 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
        !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
     }
-    let client = reqwest::Client::builder().user_agent("DRAGON-Launcher/0.1.0").build()
+    let client = reqwest::Client::builder()
+        .user_agent("DRAGON-Launcher/0.1.0")
+        .connect_timeout(Duration::from_secs(25))
+        .timeout(Duration::from_secs(180))
+        .pool_idle_timeout(Duration::from_secs(30))
+        .build()
         .map_err(|e| format!("Could not initialize downloader: {e}"))?;
     let root = launcher_data_dir()?.join("game");
     fs::create_dir_all(&root).map_err(|e| format!("Could not create game directory: {e}"))?;
@@ -281,9 +354,7 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
                 let sha = artifact.get("sha1").and_then(Value::as_str);
                 total_bytes += download_verified(&client, url, &root.join("libraries").join(relative), sha).await?;
                 installed_libraries += 1;
-                if installed_libraries % 10 == 0 {
-                    let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"libraries","done":installed_libraries,"total":libraries.len()}));
-                }
+                let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"libraries","done":installed_libraries,"total":libraries.len()}));
             }
         }
     }
@@ -305,9 +376,7 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
             let destination = root.join("assets").join("objects").join(&hash[0..2]).join(hash);
             total_bytes += download_verified(&client, &url, &destination, Some(hash)).await?;
             asset_count += 1;
-            if asset_count % 100 == 0 {
-                let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"assets","done":asset_count,"total":objects.len()}));
-            }
+            let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"assets","done":asset_count,"total":objects.len()}));
         }
     }
     if !is_minecraft_version_installed(version_id.clone())? {
@@ -611,6 +680,9 @@ fn create_game_instance(name: String, version_id: String) -> Result<Value, Strin
         || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
     }
+    if !is_minecraft_version_installed(version_id.clone())? {
+        return Err(format!("لا يمكن إنشاء النسخة قبل اكتمال تثبيت Minecraft {version_id}. افتح صفحة الإصدارات وثبّت الإصدار بالكامل أولاً."));
+    }
     let root = launcher_data_dir()?.join("instances");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let created_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
@@ -730,7 +802,7 @@ fn save_launcher_config(app: tauri::AppHandle, config: Value) -> Result<(), Stri
 }
 
 #[tauri::command]
-async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String) -> Result<String, String> {
+async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String, instance_id: Option<String>) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid download URL: {e}"))?;
     if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
         return Err("Downloads are only allowed from the official Modrinth CDN over HTTPS".to_string());
@@ -739,6 +811,7 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     if safe_name != filename || filename.contains('/') || filename.contains('\\') { return Err("Invalid download filename".to_string()); }
     let folder = match kind.as_str() { "mod" if filename.to_ascii_lowercase().ends_with(".jar") => "mods",
         "modpack" if filename.to_ascii_lowercase().ends_with(".mrpack") => "modpacks",
+        "resourcepack" if filename.to_ascii_lowercase().ends_with(".zip") => "resourcepacks",
         _ => return Err("File type does not match selected project type".to_string()) };
     // Do not follow redirects: a trusted CDN URL must not be able to redirect the
     // launcher to an unrelated host. Stream with a hard size cap to avoid unbounded
@@ -749,7 +822,7 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
         .build().map_err(|e| format!("Could not initialize Modrinth downloader: {e}"))?;
     let mut response = client.get(parsed).send().await.map_err(|e| e.to_string())?;
     if !response.status().is_success() { return Err(format!("Modrinth CDN returned HTTP {}", response.status())); }
-    let max_bytes: usize = if kind == "mod" { 100 * 1024 * 1024 } else { 512 * 1024 * 1024 };
+    let max_bytes: usize = if kind == "mod" { 100 * 1024 * 1024 } else if kind == "resourcepack" { 256 * 1024 * 1024 } else { 512 * 1024 * 1024 };
     if response.content_length().map(|length| length > max_bytes as u64).unwrap_or(false) {
         return Err("The selected Modrinth file exceeds the allowed download size".to_string());
     }
@@ -765,7 +838,16 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     let config_path = config_file(&app)?;
     let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
     let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let base = if kind == "mod" { game_dir.join(folder) } else { data_dir.join(folder) };
+    let base = if kind == "mod" || kind == "resourcepack" {
+        if let Some(id) = instance_id.as_deref() {
+            if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+                return Err("Invalid instance identifier".to_string());
+            }
+            let instance_dir = data_dir.join("instances").join(id);
+            if !instance_dir.join("instance.json").is_file() { return Err("Selected instance was not found".to_string()); }
+            instance_dir.join(folder)
+        } else { game_dir.join(folder) }
+    } else { data_dir.join(folder) };
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let mut destination = base.join(&filename);
     if destination.exists() {
@@ -792,7 +874,7 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
 
 
 #[tauri::command]
-fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String) -> Result<String, String> {
+fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String, instance_id: Option<String>) -> Result<String, String> {
     if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".jar")
         || filename.contains('/') || filename.contains('\\')
         || filename == "." || filename == ".." {
@@ -809,7 +891,14 @@ fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: Str
     let config_path = config_file(&app)?;
     let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
     let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let mods_dir = game_dir.join("mods");
+    let mods_dir = if let Some(id) = instance_id.as_deref() {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let instance_dir = data_dir.join("instances").join(id);
+        if !instance_dir.join("instance.json").is_file() { return Err("Selected instance was not found".to_string()); }
+        instance_dir.join("mods")
+    } else { game_dir.join("mods") };
     fs::create_dir_all(&mods_dir).map_err(|e| format!("Could not create mods folder: {e}"))?;
     let mut destination = mods_dir.join(&filename);
     if destination.exists() {
@@ -823,6 +912,86 @@ fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: Str
         }
     }
     fs::write(&destination, bytes).map_err(|e| format!("Could not save imported mod: {e}"))?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn list_downloaded_game_content(app: tauri::AppHandle, folder: String, instance_id: Option<String>) -> Result<Vec<Value>, String> {
+    if !["mods", "resourcepacks"].contains(&folder.as_str()) {
+        return Err("Only mods and resourcepacks can be listed".to_string());
+    }
+    let data_dir = launcher_data_dir()?;
+    let config_path = config_file(&app)?;
+    let config: Value = if config_path.exists() {
+        serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({}))
+    } else { json!({}) };
+    let game_dir = config.get("game_directory").and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
+    let mut roots: Vec<(PathBuf, String)> = vec![(game_dir.join(&folder), "عام".to_string())];
+    if let Some(id) = instance_id.as_deref() {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let instance_dir = data_dir.join("instances").join(id);
+        if !instance_dir.join("instance.json").is_file() { return Err("Selected instance was not found".to_string()); }
+        roots.push((instance_dir.join(&folder), format!("instance:{id}")));
+    }
+    let mut items = Vec::new();
+    for (root, source) in roots {
+        if !root.exists() { continue; }
+        for entry in fs::read_dir(&root).map_err(|e| format!("Could not read {}: {e}", root.display()))? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            let metadata = entry.metadata().map_err(|e| e.to_string())?;
+            if folder == "mods" && (!metadata.is_file() || path.extension().and_then(|x| x.to_str()) != Some("jar")) { continue; }
+            if folder == "resourcepacks" && metadata.is_file() && path.extension().and_then(|x| x.to_str()).map(|x| !x.eq_ignore_ascii_case("zip")).unwrap_or(true) { continue; }
+            items.push(json!({
+                "name": entry.file_name().to_string_lossy().into_owned(),
+                "path": path.to_string_lossy().into_owned(),
+                "size": if metadata.is_file() { metadata.len() } else { 0 },
+                "directory": metadata.is_dir(),
+                "source": source
+            }));
+        }
+    }
+    items.sort_by(|a,b| a.get("name").and_then(Value::as_str).unwrap_or("").to_lowercase()
+        .cmp(&b.get("name").and_then(Value::as_str).unwrap_or("").to_lowercase()));
+    Ok(items)
+}
+
+#[tauri::command]
+fn import_external_resourcepack(filename: String, data_base64: String, instance_id: Option<String>) -> Result<String, String> {
+    if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".zip")
+        || filename.contains('/') || filename.contains('\\') || filename == "." || filename == ".." {
+        return Err("Choose a valid .zip resource pack".to_string());
+    }
+    if data_base64.len() > 360_000_000 { return Err("Resource pack exceeds the 256 MB import limit".to_string()); }
+    let bytes = BASE64.decode(data_base64).map_err(|_| "Invalid encoded file data".to_string())?;
+    if bytes.len() < 4 || bytes.len() > 256 * 1024 * 1024 || &bytes[0..2] != b"PK" {
+        return Err("The selected file is not a valid ZIP resource pack or exceeds 256 MB".to_string());
+    }
+    let data_dir = launcher_data_dir()?;
+    let base = if let Some(id) = instance_id.as_deref() {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let instance_dir = data_dir.join("instances").join(id);
+        if !instance_dir.join("instance.json").is_file() { return Err("Selected instance was not found".to_string()); }
+        instance_dir.join("resourcepacks")
+    } else { data_dir.join("game").join("resourcepacks") };
+    fs::create_dir_all(&base).map_err(|e| e.to_string())?;
+    let mut destination = base.join(&filename);
+    if destination.exists() {
+        let stem = Path::new(&filename).file_stem().and_then(|v| v.to_str()).unwrap_or("resourcepack");
+        let mut index = 2u32;
+        loop {
+            destination = base.join(format!("{stem}-{index}.zip"));
+            if !destination.exists() { break; }
+            index += 1;
+            if index > 10_000 { return Err("Too many files with the same name".to_string()); }
+        }
+    }
+    fs::write(&destination, bytes).map_err(|e| format!("Could not save resource pack: {e}"))?;
     Ok(destination.to_string_lossy().into_owned())
 }
 
@@ -985,7 +1154,16 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_notification::init())
+        .setup(|app| {
+            let data_dir = app.path().app_data_dir()?;
+            fs::create_dir_all(&data_dir)?;
+            APP_DATA_DIR.set(data_dir).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::AlreadyExists, "Application data directory was already initialized")
+            })?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![get_system_environment, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
-            save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
+            save_launcher_config, download_modrinth_file, list_downloaded_game_content, import_external_resourcepack, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
