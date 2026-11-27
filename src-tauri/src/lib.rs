@@ -83,12 +83,16 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
 fn library_allowed(library: &Value) -> bool {
     let Some(rules) = library.get("rules").and_then(Value::as_array) else { return true; };
     let os = match std::env::consts::OS { "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => "unsupported" };
+    let arch = std::env::consts::ARCH;
     let mut allowed = false;
     for rule in rules {
         let action = rule.get("action").and_then(Value::as_str).unwrap_or("disallow");
-        let os_match = rule.get("os").and_then(|v| v.get("name")).and_then(Value::as_str)
+        let os_rule = rule.get("os");
+        let name_matches = os_rule.and_then(|v| v.get("name")).and_then(Value::as_str)
             .map(|name| name == os).unwrap_or(true);
-        if os_match { allowed = action == "allow"; }
+        let arch_matches = os_rule.and_then(|v| v.get("arch")).and_then(Value::as_str)
+            .map(|expected| expected == arch || (expected == "x86" && arch == "x86")).unwrap_or(true);
+        if name_matches && arch_matches { allowed = action == "allow"; }
     }
     allowed
 }
@@ -306,6 +310,9 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
             }
         }
     }
+    if !is_minecraft_version_installed(version_id.clone())? {
+        return Err("اكتمل التنزيل لكن فحص الملفات كشف أن بعض ملفات Minecraft أو المكتبات أو الأصول ما زالت ناقصة. أعد المحاولة.".to_string());
+    }
     let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"complete","done":1,"total":1}));
     Ok(InstallResult { version: version_id, game_directory: root.to_string_lossy().into_owned(),
         downloaded_bytes: total_bytes, libraries: installed_libraries, natives: installed_natives, assets: asset_count })
@@ -409,7 +416,7 @@ fn launch_minecraft(
         java_version_text.split('.').next().and_then(|v| v.parse::<u32>().ok())
     }.ok_or_else(|| format!("تعذر تحليل إصدار Java: {java_version_text}"))?;
     if let Some(required) = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64) {
-        if java_major as u64 < required {
+        if (java_major as u64) < required {
             return Err(format!("هذا الإصدار يحتاج Java {required} أو أحدث، بينما المثبّت هو Java {java_major}."));
         }
     }
