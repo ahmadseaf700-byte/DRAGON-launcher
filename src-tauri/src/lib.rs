@@ -22,9 +22,17 @@ fn config_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
+// Tauri resolves the correct per-app data directory on desktop and Android.
+static APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 fn launcher_data_dir() -> Result<PathBuf, String> {
-    let base = dirs::data_dir().ok_or_else(|| "Could not resolve application data directory".to_string())?;
-    let dir = base.join("DRAGONLauncher");
+    let dir = if let Some(path) = APP_DATA_DIR.get() {
+        path.clone()
+    } else {
+        // Fallback for contexts where the Tauri setup hook has not populated the path.
+        let base = dirs::data_dir().ok_or_else(|| "Could not resolve application data directory".to_string())?;
+        base.join("DRAGONLauncher")
+    };
     fs::create_dir_all(&dir).map_err(|error| format!("Could not create launcher data directory: {error}"))?;
     Ok(dir)
 }
@@ -985,6 +993,14 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            let data_dir = app.path().app_data_dir()?;
+            fs::create_dir_all(&data_dir)?;
+            APP_DATA_DIR.set(data_dir).map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::AlreadyExists, "Application data directory was already initialized")
+            })?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![get_system_environment, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
