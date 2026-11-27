@@ -90,7 +90,7 @@ export default function App() {
       setPlayProgress({ stage: p.stage, done: p.done, total: p.total });
       const percent = p.total > 0 ? Math.min(100, Math.floor(p.done / p.total * 100)) : 0;
       const names: Record<string, string> = { client: "ملف اللعبة", libraries: "المكتبات", natives: "ملفات النظام", assets: "أصول اللعبة" };
-      void sendNotification({ id: 7311, title: "DRAGON Launcher", body: `تنزيل Minecraft ${p.version}: ${names[p.stage] || p.stage} — ${percent}% (${p.done}/${p.total})`, ongoing: true, autoCancel: false }).catch(() => undefined);
+      sendNotification({ id: 7311, title: "DRAGON Launcher", body: `تنزيل Minecraft ${p.version}: ${names[p.stage] || p.stage} — ${percent}% (${p.done}/${p.total})`, ongoing: true, autoCancel: false });
     }).then(fn => { if (cancelled) fn(); else unlisten = fn; });
     return () => { cancelled = true; unlisten?.(); };
   }, [native]);
