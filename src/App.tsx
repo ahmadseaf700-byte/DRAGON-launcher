@@ -283,13 +283,13 @@ export default function App() {
           {(launchMessage || launchError) && <div className={"launch-feedback " + (launchError ? "is-error" : "is-success")} role="status">{launchError || launchMessage}</div>}
           <footer className="play-dock">
             <div className="dock-game-icon"><Gamepad2 size={23} /></div>
-            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{activeGamePid !== null ? (lang === "ar" ? "اللعبة تعمل · PID " : "Running · PID ") + activeGamePid : !selectedVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + selectedVersion : t.notInstalled + " · " + selectedVersion}</span></div>
+            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{activeGamePid !== null ? (lang === "ar" ? "اللعبة تعمل · PID " : "Running · PID ") + activeGamePid : !effectiveVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + effectiveVersion : t.notInstalled + " · " + effectiveVersion}</span></div>
             {activeGamePid !== null ? (
               <button className="play-button" onClick={() => void handleStopGame()} disabled={stoppingGame} title={lang === "ar" ? "إيقاف عملية Minecraft التي بدأها اللانشر" : "Stop the Minecraft process launched by DRAGON"}>
                 <Square size={16} fill="currentColor" />{stoppingGame ? (lang === "ar" ? "جارٍ الإيقاف..." : "Stopping...") : (lang === "ar" ? "إيقاف" : "Stop")}
               </button>
             ) : (
-              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
+              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !effectiveVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !effectiveVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
             )}
           </footer>
           <p className="footer-note">DRAGON LAUNCHER <span>•</span> BUILT FOR YOUR WORLDS</p>
