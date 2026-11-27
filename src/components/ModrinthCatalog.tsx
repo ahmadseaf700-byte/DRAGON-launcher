@@ -7,7 +7,7 @@ type Hit = { project_id: string; slug: string; title: string; description: strin
 type SearchResponse = { hits: Hit[]; total_hits?: number; offset?: number; limit?: number };
 type ProjectVersion = { name: string; version_number: string; files: { url: string; filename: string; primary?: boolean }[] };
 
-export default function ModrinthCatalog({ lang, kind, instanceId }: { lang: Language; kind: "mod" | "modpack"; instanceId: string | null }) {
+export default function ModrinthCatalog({ lang, kind, instanceId }: { lang: Language; kind: "mod" | "modpack" | "resourcepack"; instanceId: string | null }) {
   const ar = lang === "ar";
   const native = isTauri();
   const [query, setQuery] = useState("");
@@ -86,7 +86,7 @@ export default function ModrinthCatalog({ lang, kind, instanceId }: { lang: Lang
   };
 
   return <section className="feature-page">
-    <div className="feature-intro"><div className="feature-symbol">{kind === "mod" ? <Blocks size={25} /> : <Package size={25} />}</div><div><h3>{kind === "mod" ? (ar ? "استكشاف المودات" : "Explore mods") : (ar ? "استكشاف حزم المودات" : "Explore modpacks")}</h3><p>{ar ? "بحث مباشر في فهرس Modrinth الرسمي مع تنزيل الملفات المتوافقة إلى مجلد اللانشر." : "Search the official Modrinth index and download compatible files into the launcher folder."}</p></div></div>
+    <div className="feature-intro"><div className="feature-symbol">{kind === "mod" ? <Blocks size={25} /> : <Package size={25} />}</div><div><h3>{kind === "mod" ? (ar ? "استكشاف المودات" : "Explore mods") : kind === "modpack" ? (ar ? "استكشاف حزم المودات" : "Explore modpacks") : (ar ? "مكتبة الريسوس باكات" : "Resource pack library")}</h3><p>{ar ? "بحث مباشر في فهرس Modrinth الرسمي مع تنزيل الملفات المتوافقة إلى مجلد اللانشر." : "Search the official Modrinth index and download compatible files into the launcher folder."}</p></div></div>
     {kind === "mod" && <div className="settings-actions"><button onClick={() => externalFileRef.current?.click()} disabled={busyId === "external"}><FileUp size={16}/>{ar ? "استيراد مود من الجهاز" : "Import mod from device"}</button><input ref={externalFileRef} type="file" accept=".jar,application/java-archive" hidden onChange={e => { void importExternal(e.target.files?.[0]); e.currentTarget.value = ""; }} /></div>}
     <div className="modrinth-filters">
       <label className="modrinth-search"><Search size={17} /><input value={query} onChange={e => setQuery(e.target.value)} placeholder={ar ? "ابحث بالاسم..." : "Search by name..."} /><button onClick={() => { setPageOffset(0); setTotalHits(0); void search(false); }} aria-label={ar ? "بحث" : "Search"}><RefreshCw size={16} /></button></label>
@@ -99,6 +99,6 @@ export default function ModrinthCatalog({ lang, kind, instanceId }: { lang: Lang
     {!loading && hits.length === 0 && !error && <div className="feature-empty">{ar ? "لا توجد نتائج. جرّب تغيير البحث أو الفلاتر." : "No results. Try changing your search or filters."}</div>}
     <div className="mod-result-list">{hits.map(project => <article className="mod-result" key={project.project_id}>{project.icon_url ? <img src={project.icon_url} alt="" loading="lazy" /> : <div className="mod-result-placeholder"><Package size={20} /></div>}<div className="mod-result-copy"><strong>{project.title}</strong><p>{project.description}</p><small>{project.downloads.toLocaleString()} {ar ? "تنزيل" : "downloads"}</small></div><div className="mod-result-actions"><button disabled={busyId === project.project_id} onClick={() => void download(project)}><Download size={15} />{busyId === project.project_id ? "…" : (ar ? "تنزيل" : "Download")}</button><a href={`https://modrinth.com/${kind}/${project.slug}`} target="_blank" rel="noreferrer" aria-label={ar ? "فتح Modrinth" : "Open Modrinth"}><ExternalLink size={15} /></a></div></article>)}</div>
     {!loading && hits.length < totalHits && <div className="settings-actions"><button onClick={() => void search(true)}>{ar ? "تحميل المزيد" : "Load more"}</button></div>}
-    <p className="feature-footnote">{ar ? "ملفات المودات تحفظ في مجلد mods، وحزم المودات تحفظ كملفات .mrpack في مجلد modpacks. يلزم تثبيت المشغل المناسب قبل تشغيل المود." : "Mods are saved in the mods folder; modpacks are saved as .mrpack files in modpacks. The matching mod loader must be installed before launching."}</p>
+    <p className="feature-footnote">{ar ? "المودات تحفظ في mods، وحزم المودات في modpacks، وحزم الموارد في resourcepacks." : "Mods are saved in mods, modpacks in modpacks, and resource packs in resourcepacks."}</p>
   </section>;
 }
