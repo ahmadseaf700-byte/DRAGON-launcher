@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { Download, FileUp, Plus, Save, Trash2, Keyboard } from "lucide-react";
+import { Download, FileUp, Plus, Trash2, Keyboard } from "lucide-react";
 import type { Language } from "../locales/translations";
 
 type Action = { type: "select_slot" | "press_key" | "attack" | "use_item" | "build" | "wait"; value?: string };
@@ -50,7 +50,7 @@ export default function KeybindsPanel({ lang }: { lang: Language }) {
       const clean = incoming.map((item: any) => {
         if (!item || typeof item.name !== "string" || typeof item.key !== "string" || !Array.isArray(item.actions) || item.actions.length < 1 || item.actions.length > 4) throw new Error("Each button must have 1–4 actions");
         const actions = item.actions.map((a: any) => {
-          if (!Object.hasOwn(actionNames, a.type)) throw new Error("Unsupported action type");
+          if (!Object.prototype.hasOwnProperty.call(actionNames, a.type)) throw new Error("Unsupported action type");
           if (a.type === "select_slot" && !/^[1-9]$/.test(String(a.value))) throw new Error("Hotbar slot must be 1–9");
           return { type: a.type, ...(a.value !== undefined ? { value: String(a.value).slice(0, 100) } : {}) };
         });
