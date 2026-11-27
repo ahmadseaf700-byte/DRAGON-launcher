@@ -356,6 +356,23 @@ fn safe_relative_path(raw: &str) -> Result<PathBuf, String> {
 }
 
 
+#[cfg(test)]
+mod java_archive_path_tests {
+    use super::safe_relative_path;
+
+    #[test]
+    fn accepts_normal_archive_paths() {
+        assert_eq!(safe_relative_path("jdk-21/bin/java").unwrap().to_string_lossy(), "jdk-21/bin/java");
+    }
+
+    #[test]
+    fn rejects_parent_traversal_and_absolute_paths() {
+        assert!(safe_relative_path("../outside").is_err());
+        assert!(safe_relative_path("jdk/../../outside").is_err());
+        assert!(safe_relative_path("/absolute/path").is_err());
+    }
+}
+
 fn native_classifier_key(library: &Value) -> Option<String> {
     let os = match std::env::consts::OS {
         "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => return None
