@@ -24,6 +24,9 @@ export default function App() {
   const t = translations[lang];
   const [system, setSystem] = useState<SystemEnv | null>(null);
   const [systemError, setSystemError] = useState(false);
+  const [launching, setLaunching] = useState(false);
+  const [launchMessage, setLaunchMessage] = useState("");
+  const [launchError, setLaunchError] = useState("");
   const native = isTauri();
 
   useEffect(() => {
@@ -55,6 +58,28 @@ export default function App() {
   };
   const currentLabel = navItems.find(item => item.id === activeTab)?.label ?? t.home;
   const maxRam = system ? Math.max(1024, Math.min(16384, system.total_ram_mb - 1024)) : 8192;
+
+  const handlePlay = async () => {
+    setLaunchError(""); setLaunchMessage("");
+    if (!native) { setLaunchError(lang === "ar" ? "شغّل نسخة التطبيق المثبتة لتشغيل Minecraft." : "Run the installed desktop app to launch Minecraft."); return; }
+    if (!selectedVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
+    let accounts: Array<{ id: string; username: string; uuid: string }> = [];
+    try { accounts = JSON.parse(localStorage.getItem("dragon.localAccounts") || "[]"); } catch { accounts = []; }
+    const activeId = localStorage.getItem("dragon.activeAccount") || "";
+    const account = accounts.find(item => item.id === activeId);
+    if (!account) { setLaunchError(lang === "ar" ? "أنشئ حساباً محلياً واختره قبل اللعب." : "Create and select a local profile before playing."); setActiveTab("accounts"); return; }
+    setLaunching(true);
+    try {
+      const result = await invoke<{ pid: number; log_file: string; java_executable: string }>("launch_minecraft", {
+        versionId: selectedVersion, playerName: account.username, playerUuid: account.uuid, ramMb: ramMB
+      });
+      setLaunchMessage(lang === "ar"
+        ? "تم إرسال اللعبة إلى Java. رقم العملية: " + result.pid + " — سجل التشغيل: " + result.log_file
+        : "Minecraft was started by Java. Process: " + result.pid + " — output: " + result.log_file);
+    } catch (error) {
+      setLaunchError(String(error));
+    } finally { setLaunching(false); }
+  };
 
   return (
     <div className="launcher-shell" dir={lang === "ar" ? "rtl" : "ltr"}>
@@ -162,10 +187,11 @@ export default function App() {
               <span className="coming-label">{lang === "ar" ? "قيد التطوير — لن نعرض وظائف وهمية" : "In development — no fake controls"}</span>
             </section>
           )}
+          {(launchMessage || launchError) && <div className={"launch-feedback " + (launchError ? "is-error" : "is-success")} role="status">{launchError || launchMessage}</div>}
           <footer className="play-dock">
             <div className="dock-game-icon"><Gamepad2 size={23} /></div>
             <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{t.notInstalled} · {selectedVersion ?? (lang === "ar" ? "لا يوجد إصدار محدد" : "No version selected")}</span></div>
-            <button className="play-button" disabled title={t.notInstalled}><Play size={17} fill="currentColor" />{t.play}</button>
+            <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
           </footer>
           <p className="footer-note">DRAGON LAUNCHER <span>•</span> BUILT FOR YOUR WORLDS</p>
         </div>
