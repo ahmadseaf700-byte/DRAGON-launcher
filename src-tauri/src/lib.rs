@@ -269,7 +269,11 @@ fn read_game_log() -> Result<String, String> {
     let path = launcher_data_dir()?.join("game").join("logs").join("latest.log");
     if !path.exists() { return Ok(String::new()); }
     let mut content = fs::read_to_string(&path).map_err(|e| format!("Could not read Minecraft log: {e}"))?;
-    if content.len() > 1_000_000 { content = content.split_off(content.len() - 1_000_000); }
+    if content.len() > 1_000_000 {
+        let mut start = content.len() - 1_000_000;
+        while !content.is_char_boundary(start) { start += 1; }
+        content = content[start..].to_string();
+    }
     Ok(content)
 }
 
