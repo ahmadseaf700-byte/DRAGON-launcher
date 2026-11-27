@@ -53,9 +53,20 @@ fn config_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
+#[cfg(target_os = "android")]
+static ANDROID_APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 fn launcher_data_dir() -> Result<PathBuf, String> {
-    let base = dirs::data_dir().ok_or_else(|| "Could not resolve application data directory".to_string())?;
-    let dir = base.join("DRAGONLauncher");
+    #[cfg(target_os = "android")]
+    let dir = ANDROID_APP_DATA_DIR.get().cloned()
+        .ok_or_else(|| "Android application storage is not initialized yet".to_string())?;
+
+    #[cfg(not(target_os = "android"))]
+    let dir = {
+        let base = dirs::data_dir().ok_or_else(|| "Could not resolve application data directory".to_string())?;
+        base.join("DRAGONLauncher")
+    };
+
     fs::create_dir_all(&dir).map_err(|error| format!("Could not create launcher data directory: {error}"))?;
     Ok(dir)
 }
@@ -1471,6 +1482,17 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            #[cfg(target_os = "android")]
+            {
+                let app_data_dir = app.path().app_data_dir()?;
+                fs::create_dir_all(&app_data_dir)?;
+                ANDROID_APP_DATA_DIR.set(app_data_dir).map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::Other, "Android app data directory was already initialized")
+                })?;
+            }
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![get_system_environment, get_minecraft_version_manifest, get_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
