@@ -78,6 +78,15 @@ async fn fetch_json(client: &reqwest::Client, url: &str) -> Result<Value, String
     response.json::<Value>().await.map_err(|e| format!("Invalid Mojang JSON: {e}"))
 }
 
+#[tauri::command]
+async fn get_minecraft_version_manifest() -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("DRAGON-Launcher/0.1.0")
+        .build()
+        .map_err(|e| format!("Could not initialize Mojang connection: {e}"))?;
+    fetch_json(&client, "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json").await
+}
+
 async fn download_verified(client: &reqwest::Client, url: &str, destination: &Path, expected_sha1: Option<&str>) -> Result<u64, String> {
     if destination.exists() {
         if let Some(expected) = expected_sha1 {
@@ -1462,7 +1471,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, get_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, get_minecraft_version_manifest, get_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
