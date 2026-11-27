@@ -619,6 +619,9 @@ fn create_game_instance(name: String, version_id: String) -> Result<Value, Strin
         || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
     }
+    if !is_minecraft_version_installed(version_id.clone())? {
+        return Err(format!("لا يمكن إنشاء النسخة قبل اكتمال تثبيت Minecraft {version_id}. افتح صفحة الإصدارات وثبّت الإصدار بالكامل أولاً."));
+    }
     let root = launcher_data_dir()?.join("instances");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let created_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
