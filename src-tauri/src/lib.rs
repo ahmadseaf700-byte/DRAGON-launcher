@@ -290,7 +290,7 @@ fn launch_minecraft(
     app: tauri::AppHandle,
     version_id: String,
     player_name: String,
-    _player_uuid: String,
+    player_uuid: String,
     ram_mb: u64
 ) -> Result<LaunchResult, String> {
     if std::env::consts::OS == "android" {
@@ -305,6 +305,7 @@ fn launch_minecraft(
     uuid_bytes[6] = (uuid_bytes[6] & 0x0f) | 0x30;
     uuid_bytes[8] = (uuid_bytes[8] & 0x3f) | 0x80;
     let uuid_clean = uuid_bytes.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+    let _ = player_uuid;
     if version_id.is_empty() || version_id.len() > 64
         || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
