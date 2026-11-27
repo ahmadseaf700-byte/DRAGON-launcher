@@ -638,6 +638,7 @@ fn delete_game_instance(instance_id: String) -> Result<(), String> {
 
 #[tauri::command]
 fn rename_game_instance(instance_id: String, name: String) -> Result<Value, String> {
+    if instance_id.is_empty() || instance_id.len() > 100 || !instance_id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) { return Err("Invalid instance identifier".to_string()); }
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 40 || name.chars().any(|c| c.is_control()) {
         return Err("اسم النسخة يجب أن يكون بين 1 و40 حرفاً.".to_string());
@@ -659,6 +660,7 @@ fn rename_game_instance(instance_id: String, name: String) -> Result<Value, Stri
 
 #[tauri::command]
 fn open_instance_folder(instance_id: String, folder: String) -> Result<(), String> {
+    if instance_id.is_empty() || instance_id.len() > 100 || !instance_id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) { return Err("Invalid instance identifier".to_string()); }
     let allowed = ["", "mods", "config", "resourcepacks", "shaderpacks", "saves", "screenshots", "logs", "crash-reports"];
     if !allowed.contains(&folder.as_str()) { return Err("Invalid instance folder".to_string()); }
     let target = launcher_data_dir()?.join("instances").join(&instance_id);
