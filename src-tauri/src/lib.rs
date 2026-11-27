@@ -13,6 +13,36 @@ struct SystemEnvironment {
     arch: String,
     total_ram_mb: u64,
     launcher_dir: String,
+    runtime_target: String,
+    java_detected: bool,
+    java_version: Option<String>,
+    java_path: Option<String>,
+}
+
+fn detect_java_runtime() -> (bool, Option<String>, Option<String>) {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("JAVA_HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join("bin").join(if cfg!(windows) { "java.exe" } else { "java" }));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            candidates.push(directory.join(if cfg!(windows) { "java.exe" } else { "java" }));
+        }
+    }
+    for candidate in candidates {
+        if !candidate.is_file() { continue; }
+        let output = match Command::new(&candidate).arg("-version").output() {
+            Ok(output) if output.status.success() => output,
+            _ => continue,
+        };
+        let text = String::from_utf8_lossy(&output.stderr).to_string()
+            + &String::from_utf8_lossy(&output.stdout);
+        let version = text.lines().find(|line| line.contains("version"))
+            .map(|line| line.trim().trim_matches('"').to_string());
+        return (true, version, Some(candidate.to_string_lossy().into_owned()));
+    }
+    (false, None, None)
 }
 
 fn config_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -705,9 +735,12 @@ fn get_system_environment() -> Result<SystemEnvironment, String> {
     system.refresh_memory();
     let total_ram_mb = system.total_memory() / (1024 * 1024);
     let launcher_dir = launcher_data_dir()?;
+    let (java_detected, java_version, java_path) = detect_java_runtime();
+    let runtime_target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
     Ok(SystemEnvironment { os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(), total_ram_mb,
-        launcher_dir: launcher_dir.to_string_lossy().into_owned() })
+        launcher_dir: launcher_dir.to_string_lossy().into_owned(),
+        runtime_target, java_detected, java_version, java_path })
 }
 
 #[tauri::command]
