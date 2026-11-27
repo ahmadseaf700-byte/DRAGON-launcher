@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
-  Blocks, Box, Cpu, Download, Flame, Gamepad2, Globe2, Home,
+  Blocks, Cpu, Download, Flame, Gamepad2, Globe2, Home,
   Layers3, Newspaper, Play, Server, Settings, UserRound, Keyboard, type LucideIcon
 } from "lucide-react";
 import { useLauncherStore, type TabType } from "./store/useLauncherStore";
@@ -9,7 +9,7 @@ import { translations } from "./locales/translations";
 import VersionCatalog from "./components/VersionCatalog";
 import AccountsPanel from "./components/AccountsPanel";
 import SettingsPanel from "./components/SettingsPanel";
-import ModrinthCatalog from "./components/ModrinthCatalog";
+import LibraryCatalog from "./components/LibraryCatalog";
 import KeybindsPanel from "./components/KeybindsPanel";
 import ServersPanel from "./components/ServersPanel";
 
@@ -43,8 +43,7 @@ export default function App() {
   const navItems = useMemo<{ id: TabType; label: string; icon: LucideIcon }[]>(() => [
     { id: "home", label: t.home, icon: Home },
     { id: "versions", label: t.versions, icon: Layers3 },
-    { id: "mods", label: t.mods, icon: Blocks },
-    { id: "modpacks", label: t.modpacks, icon: Box },
+    { id: "mods", label: t.library, icon: Blocks },
     { id: "news", label: t.news, icon: Newspaper },
     { id: "accounts", label: t.accounts, icon: UserRound },
     { id: "keybinds", label: lang === "ar" ? "الأزرار" : "Keybinds", icon: Keyboard },
@@ -54,7 +53,7 @@ export default function App() {
   ], [t]);
 
   const pageDescriptions: Partial<Record<TabType, string>> = {
-    versions: t.versionsDescription, mods: t.modsDescription, modpacks: t.packsDescription,
+    versions: t.versionsDescription, mods: t.libraryDescription,
     news: t.newsDescription, accounts: t.accountDescription, servers: t.serversDescription, dragonHost: t.hostDescription,
     settings: t.settingsDescription
   };
@@ -123,9 +122,7 @@ export default function App() {
           {activeTab === "versions" ? (
             <VersionCatalog lang={lang} selectedVersion={selectedVersion} onSelect={setSelectedVersion} />
           ) : activeTab === "mods" ? (
-            <ModrinthCatalog lang={lang} kind="mod" />
-          ) : activeTab === "modpacks" ? (
-            <ModrinthCatalog lang={lang} kind="modpack" />
+            <LibraryCatalog lang={lang} />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
           ) : activeTab === "keybinds" ? (
