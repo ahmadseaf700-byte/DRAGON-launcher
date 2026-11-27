@@ -37,6 +37,27 @@ export default function App() {
   const [selectedInstance, setSelectedInstance] = useState<GameInstance | null>(() => { try { const raw = localStorage.getItem("dragon.activeInstance"); return raw ? JSON.parse(raw) as GameInstance : null; } catch { return null; } });
   const effectiveVersion = selectedInstance?.version_id || selectedVersion;
   const [stoppingGame, setStoppingGame] = useState(false);
+
+  // Reconcile the saved selection against the native instance registry on every app start.
+  // This prevents stale localStorage data from pointing Play at a deleted or changed instance.
+  useEffect(() => {
+    if (!native) return;
+    let cancelled = false;
+    invoke<GameInstance[]>("list_game_instances")
+      .then(instances => {
+        if (cancelled) return;
+        const savedId = selectedInstance?.id;
+        const current = savedId ? instances.find(instance => instance.id === savedId) ?? null : null;
+        setSelectedInstance(current);
+        if (current) localStorage.setItem("dragon.activeInstance", JSON.stringify(current));
+        else localStorage.removeItem("dragon.activeInstance");
+      })
+      .catch(error => {
+        // Keep the last saved selection if the registry cannot be read temporarily.
+        console.error("Could not reconcile saved Minecraft instance:", error);
+      });
+    return () => { cancelled = true; };
+  }, [native]);
   const native = isTauri();
 
   useEffect(() => {

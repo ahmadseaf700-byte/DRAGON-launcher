@@ -45,6 +45,7 @@ export default function InstancesPanel({ lang, selectedId, onSelect }: { lang: L
     try {
       const updated = await invoke<GameInstance>("rename_game_instance", { instanceId: item.id, name: next.trim() });
       setItems(current => current.map(entry => entry.id === item.id ? updated : entry));
+      if (selectedId === item.id) onSelect(updated);
       setNotice(ar ? "تم تغيير اسم النسخة." : "Instance renamed.");
     } catch (e) { setError(String(e)); } finally { setBusy(""); }
   };
@@ -61,6 +62,7 @@ export default function InstancesPanel({ lang, selectedId, onSelect }: { lang: L
     try {
       await invoke("delete_game_instance", { instanceId: item.id });
       setItems(current => current.filter(entry => entry.id !== item.id));
+      if (selectedId === item.id) onSelect(null);
       setNotice(ar ? "تم حذف النسخة." : "Instance deleted.");
     } catch (e) { setError(String(e)); }
     finally { setBusy(""); }
