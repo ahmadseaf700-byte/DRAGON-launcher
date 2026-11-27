@@ -30,7 +30,7 @@ jobs:
         run: npm install
 
       - name: Generate application icons
-        run: npm run tauri -- icon src-tauri/icons/dragon.svg --output src-tauri/icons
+        run: npm run tauri -- icon src-tauri/icons/dragon.svg --output icons
 
       - name: Build Windows installers
         run: npm run tauri -- build
@@ -93,7 +93,7 @@ jobs:
         run: npm run tauri -- android init
 
       - name: Generate application icons
-        run: npm run tauri -- icon src-tauri/icons/dragon.svg --output src-tauri/icons
+        run: npm run tauri -- icon src-tauri/icons/dragon.svg --output icons
 
       - name: Build Android APK
         run: npm run tauri -- android build --apk --target aarch64
