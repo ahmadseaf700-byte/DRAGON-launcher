@@ -5,7 +5,7 @@ import type { Language } from "../locales/translations";
 import ModrinthCatalog from "./ModrinthCatalog";
 
 type ContentItem = { name: string; path: string; size: number; directory: boolean; source: string };
-type View = "browse-mods" | "browse-packs" | "downloaded-mods" | "downloaded-resourcepacks";
+type View = "browse-mods" | "browse-packs" | "browse-resourcepacks" | "downloaded-mods" | "downloaded-resourcepacks";
 
 export default function LibraryCatalog({ lang, instanceId }: { lang: Language; instanceId: string | null }) {
   const ar = lang === "ar";
@@ -79,8 +79,9 @@ export default function LibraryCatalog({ lang, instanceId }: { lang: Language; i
   const tabs: { id: View; label: string; icon: typeof Blocks }[] = [
     { id: "browse-mods", label: ar ? "استكشاف المودات" : "Browse mods", icon: Blocks },
     { id: "browse-packs", label: ar ? "حزم المودات" : "Modpacks", icon: Package },
+    { id: "browse-resourcepacks", label: ar ? "مكتبة الريسوس باكات" : "Resource pack library", icon: Package },
     { id: "downloaded-mods", label: ar ? "المودات المحمّلة" : "Downloaded mods", icon: Download },
-    { id: "downloaded-resourcepacks", label: ar ? "الريسوس باكات" : "Resource packs", icon: Package }
+    { id: "downloaded-resourcepacks", label: ar ? "الريسوس باكات المحمّلة" : "Downloaded resource packs", icon: Download }
   ];
 
   return <div className="library-page">
@@ -91,8 +92,8 @@ export default function LibraryCatalog({ lang, instanceId }: { lang: Language; i
       </button>)}
     </div>
 
-    {(view === "browse-mods" || view === "browse-packs") && (
-      <ModrinthCatalog key={view} lang={lang} kind={view === "browse-mods" ? "mod" : "modpack"} instanceId={instanceId} />
+    {(view === "browse-mods" || view === "browse-packs" || view === "browse-resourcepacks") && (
+      <ModrinthCatalog key={view} lang={lang} kind={view === "browse-mods" ? "mod" : view === "browse-packs" ? "modpack" : "resourcepack"} instanceId={instanceId} />
     )}
 
     {(view === "downloaded-mods" || view === "downloaded-resourcepacks") && <section className="feature-page">
