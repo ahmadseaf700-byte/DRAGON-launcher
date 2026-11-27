@@ -6,16 +6,19 @@ export type TabType = "home" | "versions" | "mods" | "modpacks" | "news" | "acco
 interface LauncherState {
   lang: Language;
   activeTab: TabType;
-  ramMB: number;\n  selectedVersion: string | null;
+  ramMB: number;
+  selectedVersion: string | null;
   setLang: (lang: Language) => void;
   setActiveTab: (tab: TabType) => void;
-  setRamMB: (ram: number) => void;\n  setSelectedVersion: (version: string) => void;
+  setRamMB: (ram: number) => void;
+  setSelectedVersion: (version: string) => void;
 }
 
 export const useLauncherStore = create<LauncherState>((set) => ({
   lang: "ar",
   activeTab: "home",
-  ramMB: 4096,\n  selectedVersion: typeof localStorage !== "undefined" ? localStorage.getItem("dragon.selectedVersion") : null,
+  ramMB: 4096,
+  selectedVersion: typeof localStorage !== "undefined" ? localStorage.getItem("dragon.selectedVersion") : null,
   setLang: (lang) => {
     if (typeof document !== "undefined") {
       document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
@@ -24,5 +27,9 @@ export const useLauncherStore = create<LauncherState>((set) => ({
     set({ lang });
   },
   setActiveTab: (activeTab) => set({ activeTab }),
-  setRamMB: (ramMB) => set({ ramMB }),\n  setSelectedVersion: (selectedVersion) => {\n    if (typeof localStorage !== "undefined") localStorage.setItem("dragon.selectedVersion", selectedVersion);\n    set({ selectedVersion });\n  }
+  setRamMB: (ramMB) => set({ ramMB }),
+  setSelectedVersion: (selectedVersion) => {
+    if (typeof localStorage !== "undefined") localStorage.setItem("dragon.selectedVersion", selectedVersion);
+    set({ selectedVersion });
+  }
 }));
