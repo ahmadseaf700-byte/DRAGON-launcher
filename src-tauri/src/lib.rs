@@ -241,6 +241,178 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
         downloaded_bytes: total_bytes, libraries: installed_libraries, natives: installed_natives, assets: asset_count })
 }
 
+
+fn argument_rules_allow(item: &Value) -> bool {
+    let Some(rules) = item.get("rules").and_then(Value::as_array) else { return true; };
+    let os = match std::env::consts::OS {
+        "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => "unsupported"
+    };
+    let arch = std::env::consts::ARCH;
+    let mut allowed = false;
+    for rule in rules {
+        let os_rule = rule.get("os");
+        let os_match = os_rule.and_then(|v| v.get("name")).and_then(Value::as_str)
+            .map(|name| name == os).unwrap_or(true)
+            && os_rule.and_then(|v| v.get("arch")).and_then(Value::as_str)
+                .map(|value| value == arch || (value == "x86" && arch == "x86")).unwrap_or(true);
+        let features_match = rule.get("features").and_then(Value::as_object).map(|features| {
+            features.iter().all(|(_, expected)| expected.as_bool() == Some(false))
+        }).unwrap_or(true);
+        if os_match && features_match {
+            allowed = rule.get("action").and_then(Value::as_str) == Some("allow");
+        }
+    }
+    allowed
+}
+
+fn collect_argument_values(value: &Value, output: &mut Vec<String>) {
+    match value {
+        Value::String(text) => output.push(text.clone()),
+        Value::Object(_) if argument_rules_allow(value) => {
+            if let Some(value) = value.get("value") {
+                match value {
+                    Value::String(text) => output.push(text.clone()),
+                    Value::Array(items) => output.extend(items.iter().filter_map(Value::as_str).map(str::to_string)),
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+#[derive(Serialize)]
+struct LaunchResult { pid: u32, log_file: String, java_executable: String }
+
+#[tauri::command]
+fn launch_minecraft(
+    app: tauri::AppHandle,
+    version_id: String,
+    player_name: String,
+    player_uuid: String,
+    ram_mb: u64
+) -> Result<LaunchResult, String> {
+    if std::env::consts::OS == "android" {
+        return Err("تشغيل Minecraft Java مباشرة على Android غير مدعوم بهذا البناء؛ يلزم Runtime وطبقة توافق Android مخصصة.".to_string());
+    }
+    if !player_name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        || player_name.is_empty() || player_name.len() > 16 {
+        return Err("Invalid local player name".to_string());
+    }
+    let uuid_clean = player_uuid.replace('-', "");
+    if uuid_clean.len() != 32 || !uuid_clean.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid player UUID".to_string());
+    }
+    if version_id.is_empty() || version_id.len() > 64
+        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err("Invalid Minecraft version identifier".to_string());
+    }
+
+    let root = launcher_data_dir()?.join("game");
+    let version_dir = root.join("versions").join(&version_id);
+    let metadata_path = version_dir.join(format!("{version_id}.json"));
+    let client_jar = version_dir.join(format!("{version_id}.jar"));
+    if !metadata_path.is_file() || !client_jar.is_file() {
+        return Err("هذا الإصدار غير مثبت بالكامل. نزّله أولاً من صفحة الإصدارات.".to_string());
+    }
+    let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("Invalid version metadata: {e}"))?;
+    let app_config = config_file(&app)?;
+    let config: Value = if app_config.exists() {
+        serde_json::from_slice(&fs::read(&app_config).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Invalid launcher config: {e}"))?
+    } else { json!({}) };
+    let java_path = config.get("java_path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).unwrap_or("java");
+    let game_dir = config.get("game_directory").and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| root.clone());
+    fs::create_dir_all(&game_dir).map_err(|e| format!("Could not create game directory: {e}"))?;
+
+    let mut classpath_entries: Vec<String> = Vec::new();
+    if let Some(libraries) = metadata.get("libraries").and_then(Value::as_array) {
+        for library in libraries.iter().filter(|item| library_allowed(item)) {
+            if let Some(path) = library.pointer("/downloads/artifact/path").and_then(Value::as_str) {
+                let rel = safe_relative_path(path)?;
+                let artifact = root.join("libraries").join(rel);
+                if artifact.is_file() { classpath_entries.push(artifact.to_string_lossy().into_owned()); }
+            }
+        }
+    }
+    classpath_entries.push(client_jar.to_string_lossy().into_owned());
+    let classpath = classpath_entries.join(if cfg!(windows) { ";" } else { ":" });
+    let assets_root = root.join("assets");
+    let assets_index = metadata.pointer("/assetIndex/id").and_then(Value::as_str).unwrap_or("legacy");
+    let natives_dir = version_dir.join("natives");
+    let version_type = metadata.get("type").and_then(Value::as_str).unwrap_or("release");
+
+    let mut replacements = std::collections::HashMap::<String, String>::new();
+    let values = [
+        ("\${auth_player_name}", player_name.clone()),
+        ("\${version_name}", version_id.clone()),
+        ("\${game_directory}", game_dir.to_string_lossy().into_owned()),
+        ("\${assets_root}", assets_root.to_string_lossy().into_owned()),
+        ("\${assets_index_name}", assets_index.to_string()),
+        ("\${auth_uuid}", uuid_clean),
+        ("\${auth_access_token}", String::new()),
+        ("\${user_type}", "legacy".to_string()),
+        ("\${version_type}", version_type.to_string()),
+        ("\${natives_directory}", natives_dir.to_string_lossy().into_owned()),
+        ("\${launcher_name}", "DRAGON Launcher".to_string()),
+        ("\${launcher_version}", "0.1.0".to_string()),
+        ("\${classpath}", classpath.clone()),
+        ("\${classpath_separator}", if cfg!(windows) { ";".to_string() } else { ":".to_string() }),
+        ("\${library_directory}", root.join("libraries").to_string_lossy().into_owned()),
+        ("\${clientid}", String::new()),
+        ("\${auth_xuid}", String::new()),
+        ("\${user_properties}", "{}".to_string()),
+        ("\${resolution_width}", "1280".to_string()),
+        ("\${resolution_height}", "720".to_string())
+    ];
+    for (key, value) in values { replacements.insert(key.to_string(), value); }
+    let substitute = |input: &str| -> String {
+        let mut result = input.to_string();
+        for (key, value) in &replacements { result = result.replace(key, value); }
+        result
+    };
+
+    let mut jvm_args = Vec::<String>::new();
+    if let Some(items) = metadata.pointer("/arguments/jvm").and_then(Value::as_array) {
+        for item in items { collect_argument_values(item, &mut jvm_args); }
+    }
+    for arg in &mut jvm_args { *arg = substitute(arg); }
+    if !jvm_args.iter().any(|arg| arg == "-cp" || arg == "-classpath" || arg.contains("\${classpath}")) {
+        jvm_args.push("-cp".to_string());
+        jvm_args.push(classpath);
+    }
+    let memory = ram_mb.clamp(512, 32768);
+    if !jvm_args.iter().any(|arg| arg.starts_with("-Xmx")) { jvm_args.push(format!("-Xmx{memory}M")); }
+    if !jvm_args.iter().any(|arg| arg.starts_with("-Xms")) { jvm_args.push("-Xms512M".to_string()); }
+
+    let main_class = metadata.get("mainClass").and_then(Value::as_str)
+        .ok_or_else(|| "Minecraft metadata is missing mainClass".to_string())?;
+    let mut args = jvm_args;
+    args.push(main_class.to_string());
+    if let Some(items) = metadata.pointer("/arguments/game").and_then(Value::as_array) {
+        let mut game_args = Vec::new();
+        for item in items { collect_argument_values(item, &mut game_args); }
+        args.extend(game_args.into_iter().map(|arg| substitute(&arg)));
+    } else if let Some(old_args) = metadata.get("minecraftArguments").and_then(Value::as_str) {
+        args.extend(old_args.split_whitespace().map(substitute));
+    }
+
+    let logs_dir = game_dir.join("logs");
+    fs::create_dir_all(&logs_dir).map_err(|e| e.to_string())?;
+    let log_path = logs_dir.join("dragon-console.log");
+    let stdout = fs::OpenOptions::new().create(true).append(true).open(&log_path)
+        .map_err(|e| format!("Could not open launcher output log: {e}"))?;
+    let stderr = stdout.try_clone().map_err(|e| e.to_string())?;
+    let child = Command::new(java_path).args(&args).current_dir(&game_dir)
+        .stdout(Stdio::from(stdout)).stderr(Stdio::from(stderr)).spawn()
+        .map_err(|e| format!("تعذر تشغيل Java ({java_path}): {e}. تحقق من مسار Java وإصدارها."))?;
+    let pid = child.id();
+    drop(child);
+    Ok(LaunchResult { pid, log_file: log_path.to_string_lossy().into_owned(), java_executable: java_path.to_string() })
+}
+
 #[tauri::command]
 fn get_system_environment() -> Result<SystemEnvironment, String> {
     let mut system = System::new();
@@ -343,6 +515,6 @@ fn read_game_log() -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![get_system_environment, load_launcher_config,
-            save_launcher_config, download_modrinth_file, install_minecraft_version, import_external_mod, read_game_log])
+            save_launcher_config, download_modrinth_file, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
