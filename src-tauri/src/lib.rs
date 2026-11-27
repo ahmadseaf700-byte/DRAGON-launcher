@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
@@ -230,10 +231,53 @@ async fn download_modrinth_file(_app: tauri::AppHandle, url: String, filename: S
     Ok(destination.to_string_lossy().into_owned())
 }
 
+
+#[tauri::command]
+fn import_external_mod(filename: String, data_base64: String) -> Result<String, String> {
+    if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".jar")
+        || filename.contains('/') || filename.contains('\\\\')
+        || filename == "." || filename == ".." {
+        return Err("Choose a valid .jar mod file".to_string());
+    }
+    if data_base64.len() > 140_000_000 {
+        return Err("Mod file exceeds the 100 MB import limit".to_string());
+    }
+    let bytes = BASE64.decode(data_base64).map_err(|_| "Invalid encoded file data".to_string())?;
+    if bytes.len() < 4 || bytes.len() > 100 * 1024 * 1024 || &bytes[0..2] != b"PK" {
+        return Err("The selected file is not a valid JAR/ZIP archive or exceeds 100 MB".to_string());
+    }
+    let mods_dir = launcher_data_dir()?.join("game").join("mods");
+    fs::create_dir_all(&mods_dir).map_err(|e| format!("Could not create mods folder: {e}"))?;
+    let mut destination = mods_dir.join(&filename);
+    if destination.exists() {
+        let stem = Path::new(&filename).file_stem().and_then(|v| v.to_str()).unwrap_or("mod");
+        let mut index = 2u32;
+        loop {
+            destination = mods_dir.join(format!("{stem}-{index}.jar"));
+            if !destination.exists() { break; }
+            index += 1;
+            if index > 10_000 { return Err("Too many files with the same name".to_string()); }
+        }
+    }
+    fs::write(&destination, bytes).map_err(|e| format!("Could not save imported mod: {e}"))?;
+    Ok(destination.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn read_game_log() -> Result<String, String> {
+    let path = launcher_data_dir()?.join("game").join("logs").join("latest.log");
+    if !path.exists() { return Ok(String::new()); }
+    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
+    let mut content = fs::read_to_string(&path).map_err(|e| format!("Could not read Minecraft log: {e}"))?;
+    if content.len() > 1_000_000 { content = content.split_off(content.len() - 1_000_000); }
+    let _ = metadata;
+    Ok(content)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![get_system_environment, load_launcher_config,
-            save_launcher_config, download_modrinth_file, install_minecraft_version])
+            save_launcher_config, download_modrinth_file, install_minecraft_version, import_external_mod, read_game_log])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
