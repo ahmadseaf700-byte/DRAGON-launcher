@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Save, FolderOpen, Settings2, CheckCircle2 } from "lucide-react";
+import { Save, Settings2, CheckCircle2 } from "lucide-react";
 import type { Language } from "../locales/translations";
 import { useLauncherStore } from "../store/useLauncherStore";
 
