@@ -151,12 +151,70 @@ fn extract_native_archive(archive_path: &Path, destination: &Path, excludes: &[S
 #[tauri::command]
 fn is_minecraft_version_installed(version_id: String) -> Result<bool, String> {
     if version_id.is_empty() || version_id.len() > 64
-        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || ". _-".replace(' ', "").contains(c)) {
+        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
     }
-    let version_dir = launcher_data_dir()?.join("game").join("versions").join(&version_id);
-    Ok(version_dir.join(format!("{version_id}.json")).is_file()
-        && version_dir.join(format!("{version_id}.jar")).is_file())
+
+    let root = launcher_data_dir()?.join("game");
+    let version_dir = root.join("versions").join(&version_id);
+    let metadata_path = version_dir.join(format!("{version_id}.json"));
+    let client_jar = version_dir.join(format!("{version_id}.jar"));
+    if !metadata_path.is_file() || !client_jar.is_file() {
+        return Ok(false);
+    }
+
+    let metadata: Value = match fs::read(&metadata_path)
+        .ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()) {
+        Some(value) => value,
+        None => return Ok(false),
+    };
+
+    // A launcher must not mark an instance ready when its classpath is incomplete.
+    if let Some(libraries) = metadata.get("libraries").and_then(Value::as_array) {
+        for library in libraries.iter().filter(|item| library_allowed(item)) {
+            if let Some(path) = library.pointer("/downloads/artifact/path").and_then(Value::as_str) {
+                let relative = safe_relative_path(path)?;
+                if !root.join("libraries").join(relative).is_file() {
+                    return Ok(false);
+                }
+            }
+            if let Some(key) = native_classifier_key(library) {
+                if let Some(path) = library.pointer(&format!("/downloads/classifiers/{key}/path")).and_then(Value::as_str) {
+                    let relative = safe_relative_path(path)?;
+                    if !root.join("libraries").join(relative).is_file() {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(asset_index) = metadata.get("assetIndex") {
+        let index_id = match asset_index.get("id").and_then(Value::as_str) {
+            Some(id) if !id.is_empty() && id.len() <= 80 => id,
+            _ => return Ok(false),
+        };
+        let index_path = root.join("assets").join("indexes").join(format!("{index_id}.json"));
+        let index_data: Value = match fs::read(&index_path)
+            .ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()) {
+            Some(value) => value,
+            None => return Ok(false),
+        };
+        let objects = match index_data.get("objects").and_then(Value::as_object) {
+            Some(objects) => objects,
+            None => return Ok(false),
+        };
+        for object in objects.values() {
+            let hash = match object.get("hash").and_then(Value::as_str) {
+                Some(hash) if hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()) => hash,
+                _ => return Ok(false),
+            };
+            if !root.join("assets").join("objects").join(&hash[0..2]).join(hash).is_file() {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 #[derive(Serialize)]

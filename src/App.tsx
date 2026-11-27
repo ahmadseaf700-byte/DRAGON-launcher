@@ -206,7 +206,7 @@ export default function App() {
           {(launchMessage || launchError) && <div className={"launch-feedback " + (launchError ? "is-error" : "is-success")} role="status">{launchError || launchMessage}</div>}
           <footer className="play-dock">
             <div className="dock-game-icon"><Gamepad2 size={23} /></div>
-            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{t.notInstalled} · {selectedVersion ?? (lang === "ar" ? "لا يوجد إصدار محدد" : "No version selected")}</span></div>
+            <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{!selectedVersion ? (lang === "ar" ? "اختر إصداراً للمتابعة" : "Select a version to continue") : checkingVersion ? t.checking : versionInstalled ? (lang === "ar" ? "جاهز · " : "Ready · ") + selectedVersion : t.notInstalled + " · " + selectedVersion}</span></div>
             <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
           </footer>
           <p className="footer-note">DRAGON LAUNCHER <span>•</span> BUILT FOR YOUR WORLDS</p>
