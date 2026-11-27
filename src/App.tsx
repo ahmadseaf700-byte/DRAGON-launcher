@@ -28,6 +28,8 @@ export default function App() {
   const [launching, setLaunching] = useState(false);
   const [launchMessage, setLaunchMessage] = useState("");
   const [launchError, setLaunchError] = useState("");
+  const [versionInstalled, setVersionInstalled] = useState(false);
+  const [checkingVersion, setCheckingVersion] = useState(false);
   const native = isTauri();
 
   useEffect(() => {
@@ -39,6 +41,18 @@ export default function App() {
     if (!native) return;
     invoke<SystemEnv>("get_system_environment").then(setSystem).catch(() => setSystemError(true));
   }, [native]);
+
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!native || !selectedVersion) { setVersionInstalled(false); return; }
+    setCheckingVersion(true);
+    invoke<boolean>("is_minecraft_version_installed", { versionId: selectedVersion })
+      .then(value => { if (!cancelled) setVersionInstalled(value); })
+      .catch(() => { if (!cancelled) setVersionInstalled(false); })
+      .finally(() => { if (!cancelled) setCheckingVersion(false); });
+    return () => { cancelled = true; };
+  }, [native, selectedVersion]);
 
   const navItems = useMemo<{ id: TabType; label: string; icon: LucideIcon }[]>(() => [
     { id: "home", label: t.home, icon: Home },
@@ -64,6 +78,7 @@ export default function App() {
     setLaunchError(""); setLaunchMessage("");
     if (!native) { setLaunchError(lang === "ar" ? "شغّل نسخة التطبيق المثبتة لتشغيل Minecraft." : "Run the installed desktop app to launch Minecraft."); return; }
     if (!selectedVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
+    if (!versionInstalled) { setLaunchError(lang === "ar" ? "هذا الإصدار غير مثبت. نزّله أولاً من صفحة الإصدارات." : "This version is not installed. Install it from Versions first."); setActiveTab("versions"); return; }
     let accounts: Array<{ id: string; username: string; uuid: string }> = [];
     try { accounts = JSON.parse(localStorage.getItem("dragon.localAccounts") || "[]"); } catch { accounts = []; }
     const activeId = localStorage.getItem("dragon.activeAccount") || "";
@@ -154,8 +169,8 @@ export default function App() {
                 </article>
                 <article className="info-card">
                   <div className="card-heading"><span className="card-icon amber"><Download size={19} /></span><span>{t.status}</span></div>
-                  <div className="status-value"><span className="status-warning" />{t.notInstalled}</div>
-                  <div className="card-footnote">{lang === "ar" ? "لم يتم تنزيل ملفات اللعبة بعد" : "Game files have not been downloaded"}</div>
+                  <div className="status-value"><span className={versionInstalled ? "status-dot" : "status-warning"} />{checkingVersion ? t.checking : versionInstalled ? t.installed : t.notInstalled}</div>
+                  <div className="card-footnote">{versionInstalled ? (lang === "ar" ? "ملفات الإصدار المحدد موجودة على الجهاز" : "Selected version files are present on this device") : (lang === "ar" ? "نزّل الإصدار المحدد لتتمكن من تشغيله" : "Install the selected version before launching")}</div>
                   <button className="text-action" onClick={() => setActiveTab("versions")}>{lang === "ar" ? "ابدأ من الإصدارات" : "Go to versions"} <span>↗</span></button>
                 </article>
               </section>
@@ -192,7 +207,7 @@ export default function App() {
           <footer className="play-dock">
             <div className="dock-game-icon"><Gamepad2 size={23} /></div>
             <div className="dock-copy"><strong>Minecraft Java Edition</strong><span>{t.notInstalled} · {selectedVersion ?? (lang === "ar" ? "لا يوجد إصدار محدد" : "No version selected")}</span></div>
-            <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
+            <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
           </footer>
           <p className="footer-note">DRAGON LAUNCHER <span>•</span> BUILT FOR YOUR WORLDS</p>
         </div>

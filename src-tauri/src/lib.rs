@@ -148,6 +148,17 @@ fn extract_native_archive(archive_path: &Path, destination: &Path, excludes: &[S
     Ok(())
 }
 
+#[tauri::command]
+fn is_minecraft_version_installed(version_id: String) -> Result<bool, String> {
+    if version_id.is_empty() || version_id.len() > 64
+        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || ". _-".replace(' ', "").contains(c)) {
+        return Err("Invalid Minecraft version identifier".to_string());
+    }
+    let version_dir = launcher_data_dir()?.join("game").join("versions").join(&version_id);
+    Ok(version_dir.join(format!("{version_id}.json")).is_file()
+        && version_dir.join(format!("{version_id}.jar")).is_file())
+}
+
 #[derive(Serialize)]
 struct InstallResult { version: String, game_directory: String, downloaded_bytes: u64, libraries: usize, natives: usize, assets: usize }
 
@@ -671,6 +682,6 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![get_system_environment, load_launcher_config,
-            save_launcher_config, download_modrinth_file, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, ping_minecraft_server])
+            save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }

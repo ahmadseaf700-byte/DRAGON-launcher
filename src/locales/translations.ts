@@ -38,7 +38,9 @@ export const translations = {
     hostDescription: "تكامل اختياري لإدارة سيرفرات DragonHost.",
     settingsDescription: "احفظ إعدادات الذاكرة ومجلد اللعبة ومسار Java محلياً؛ تطبيقها على تشغيل اللعبة ينتظر محرك التشغيل.",
     status: "الحالة",
-    notInstalled: "لم يتم تثبيت اللعبة بعد"
+    notInstalled: "الإصدار غير مثبت",
+    installed: "الإصدار مثبت وجاهز",
+    checking: "جارٍ التحقق من ملفات الإصدار"
   },
   en: {
     appName: "DRAGON Launcher",
@@ -77,6 +79,8 @@ export const translations = {
     hostDescription: "Optional integration for managing DragonHost servers.",
     settingsDescription: "Save memory, game directory and Java path preferences locally; applying them to the game requires the runtime engine.",
     status: "Status",
-    notInstalled: "Game is not installed yet"
+    notInstalled: "Version not installed",
+    installed: "Version installed and ready",
+    checking: "Checking version files"
   }
 } as const;
