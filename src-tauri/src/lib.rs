@@ -127,7 +127,8 @@ fn extract_native_archive(archive_path: &Path, destination: &Path, excludes: &[S
     fs::create_dir_all(destination).map_err(|e| format!("Could not create natives directory: {e}"))?;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(|e| format!("Could not read native archive entry: {e}"))?;
-        let Some(relative) = entry.enclosed_name().map(Path::to_path_buf) else { continue; };
+        let entry_name = entry.name().replace('\\', "/");
+        let Ok(relative) = safe_relative_path(&entry_name) else { continue; };
         let normalized = relative.to_string_lossy().replace('\\', "/");
         if normalized.split('/').any(|part| part == "META-INF") ||
             excludes.iter().any(|excluded| normalized == *excluded || normalized.starts_with(&format!("{}/", excluded.trim_end_matches('/')))) {
@@ -347,26 +348,26 @@ fn launch_minecraft(
 
     let mut replacements = std::collections::HashMap::<String, String>::new();
     let values = [
-        ("\${auth_player_name}", player_name.clone()),
-        ("\${version_name}", version_id.clone()),
-        ("\${game_directory}", game_dir.to_string_lossy().into_owned()),
-        ("\${assets_root}", assets_root.to_string_lossy().into_owned()),
-        ("\${assets_index_name}", assets_index.to_string()),
-        ("\${auth_uuid}", uuid_clean),
-        ("\${auth_access_token}", String::new()),
-        ("\${user_type}", "legacy".to_string()),
-        ("\${version_type}", version_type.to_string()),
-        ("\${natives_directory}", natives_dir.to_string_lossy().into_owned()),
-        ("\${launcher_name}", "DRAGON Launcher".to_string()),
-        ("\${launcher_version}", "0.1.0".to_string()),
-        ("\${classpath}", classpath.clone()),
-        ("\${classpath_separator}", if cfg!(windows) { ";".to_string() } else { ":".to_string() }),
-        ("\${library_directory}", root.join("libraries").to_string_lossy().into_owned()),
-        ("\${clientid}", String::new()),
-        ("\${auth_xuid}", String::new()),
-        ("\${user_properties}", "{}".to_string()),
-        ("\${resolution_width}", "1280".to_string()),
-        ("\${resolution_height}", "720".to_string())
+        ("${auth_player_name}", player_name.clone()),
+        ("${version_name}", version_id.clone()),
+        ("${game_directory}", game_dir.to_string_lossy().into_owned()),
+        ("${assets_root}", assets_root.to_string_lossy().into_owned()),
+        ("${assets_index_name}", assets_index.to_string()),
+        ("${auth_uuid}", uuid_clean),
+        ("${auth_access_token}", String::new()),
+        ("${user_type}", "legacy".to_string()),
+        ("${version_type}", version_type.to_string()),
+        ("${natives_directory}", natives_dir.to_string_lossy().into_owned()),
+        ("${launcher_name}", "DRAGON Launcher".to_string()),
+        ("${launcher_version}", "0.1.0".to_string()),
+        ("${classpath}", classpath.clone()),
+        ("${classpath_separator}", if cfg!(windows) { ";".to_string() } else { ":".to_string() }),
+        ("${library_directory}", root.join("libraries").to_string_lossy().into_owned()),
+        ("${clientid}", String::new()),
+        ("${auth_xuid}", String::new()),
+        ("${user_properties}", "{}".to_string()),
+        ("${resolution_width}", "1280".to_string()),
+        ("${resolution_height}", "720".to_string())
     ];
     for (key, value) in values { replacements.insert(key.to_string(), value); }
     let substitute = |input: &str| -> String {
