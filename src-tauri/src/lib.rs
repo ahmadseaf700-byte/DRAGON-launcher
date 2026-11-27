@@ -71,6 +71,9 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
     }
     let temporary = destination.with_extension("dragon-download.tmp");
     fs::write(&temporary, &bytes).map_err(|e| format!("Could not write download: {e}"))?;
+    if destination.exists() {
+        fs::remove_file(destination).map_err(|e| format!("Could not replace cached file: {e}"))?;
+    }
     fs::rename(&temporary, destination).map_err(|e| format!("Could not finalize download: {e}"))?;
     Ok(bytes.len() as u64)
 }
