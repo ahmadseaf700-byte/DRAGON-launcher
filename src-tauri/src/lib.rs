@@ -557,9 +557,26 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     let folder = match kind.as_str() { "mod" if filename.to_ascii_lowercase().ends_with(".jar") => "mods",
         "modpack" if filename.to_ascii_lowercase().ends_with(".mrpack") => "modpacks",
         _ => return Err("File type does not match selected project type".to_string()) };
-    let response = reqwest::get(parsed).await.map_err(|e| e.to_string())?;
+    // Do not follow redirects: a trusted CDN URL must not be able to redirect the
+    // launcher to an unrelated host. Stream with a hard size cap to avoid unbounded
+    // memory use when a response omits Content-Length.
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(900))
+        .build().map_err(|e| format!("Could not initialize Modrinth downloader: {e}"))?;
+    let mut response = client.get(parsed).send().await.map_err(|e| e.to_string())?;
     if !response.status().is_success() { return Err(format!("Modrinth CDN returned HTTP {}", response.status())); }
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    let max_bytes: usize = if kind == "mod" { 100 * 1024 * 1024 } else { 512 * 1024 * 1024 };
+    if response.content_length().map(|length| length > max_bytes as u64).unwrap_or(false) {
+        return Err("The selected Modrinth file exceeds the allowed download size".to_string());
+    }
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if bytes.len().saturating_add(chunk.len()) > max_bytes {
+            return Err("The selected Modrinth file exceeds the allowed download size".to_string());
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     if bytes.is_empty() { return Err("The downloaded file is empty".to_string()); }
     let data_dir = launcher_data_dir()?;
     let config_path = config_file(&app)?;
@@ -567,8 +584,26 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
     let base = if kind == "mod" { game_dir.join(folder) } else { data_dir.join(folder) };
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
-    let destination = base.join(&filename);
-    fs::write(&destination, &bytes).map_err(|e| e.to_string())?;
+    let mut destination = base.join(&filename);
+    if destination.exists() {
+        let stem = Path::new(&filename).file_stem().and_then(|v| v.to_str()).unwrap_or("download");
+        let extension = Path::new(&filename).extension().and_then(|v| v.to_str()).unwrap_or("");
+        let mut index = 2u32;
+        loop {
+            let candidate = if extension.is_empty() {
+                format!("{stem}-{index}")
+            } else {
+                format!("{stem}-{index}.{extension}")
+            };
+            destination = base.join(candidate);
+            if !destination.exists() { break; }
+            index += 1;
+            if index > 10_000 { return Err("Too many files with the same name".to_string()); }
+        }
+    }
+    let temporary = destination.with_extension(format!("{}.part", destination.extension().and_then(|v| v.to_str()).unwrap_or("download")));
+    fs::write(&temporary, &bytes).map_err(|e| e.to_string())?;
+    fs::rename(&temporary, &destination).map_err(|e| format!("Could not finalize Modrinth download: {e}"))?;
     Ok(destination.to_string_lossy().into_owned())
 }
 
