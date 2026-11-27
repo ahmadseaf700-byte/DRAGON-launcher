@@ -101,6 +101,8 @@ export default function App() {
             <ModrinthCatalog lang={lang} kind="modpack" />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
+          ) : activeTab === "keybinds" ? (
+            <KeybindsPanel lang={lang} />
           ) : activeTab === "settings" ? (
             <SettingsPanel lang={lang} />
           ) : activeTab === "home" ? (
