@@ -194,11 +194,33 @@ struct JavaCompatibility {
 }
 
 fn parse_java_major(raw: &str) -> Option<u32> {
-    let start = raw.find('"').map(|i| i + 1).unwrap_or(0);
+    let start = raw.find('"').map(|i| i + 1)
+        .or_else(|| raw.find(|c: char| c.is_ascii_digit()))?;
     let value = raw[start..].split(|c: char| !(c.is_ascii_digit() || c == '.')).next()?;
     let mut parts = value.split('.');
     let first = parts.next()?.parse::<u32>().ok()?;
     if first == 1 { parts.next()?.parse::<u32>().ok() } else { Some(first) }
+}
+
+#[cfg(test)]
+mod java_version_tests {
+    use super::parse_java_major;
+
+    #[test]
+    fn parses_modern_java_version_strings() {
+        assert_eq!(parse_java_major(r#"openjdk version "21.0.5" 2024-10-15"#), Some(21));
+        assert_eq!(parse_java_major("openjdk 25.0.1 2025-10-21"), Some(25));
+    }
+
+    #[test]
+    fn parses_legacy_java_version_strings() {
+        assert_eq!(parse_java_major(r#"java version "1.8.0_402""#), Some(8));
+    }
+
+    #[test]
+    fn rejects_unparseable_java_version_strings() {
+        assert_eq!(parse_java_major("Java runtime version unknown"), None);
+    }
 }
 
 #[tauri::command]
