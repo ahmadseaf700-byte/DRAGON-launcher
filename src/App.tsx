@@ -21,6 +21,10 @@ interface SystemEnv {
   arch: string;
   total_ram_mb: number;
   launcher_dir: string;
+  runtime_target: string;
+  java_detected: boolean;
+  java_version: string | null;
+  java_path: string | null;
 }
 
 export default function App() {
@@ -237,6 +241,9 @@ export default function App() {
                     <dl className="system-list">
                       <div><dt>{t.operatingSystem}</dt><dd>{system.os}</dd></div>
                       <div><dt>{t.architecture}</dt><dd>{system.arch}</dd></div>
+                      <div><dt>{lang === "ar" ? "هدف التشغيل" : "Runtime target"}</dt><dd>{system.runtime_target}</dd></div>
+                      <div><dt>{lang === "ar" ? "Java Runtime" : "Java Runtime"}</dt><dd>{system.java_detected ? (system.java_version || (lang === "ar" ? "تم العثور عليها" : "Detected")) : (lang === "ar" ? "غير مكتشفة" : "Not detected")}</dd></div>
+                      {system.java_path && <div className="directory-row"><dt>{lang === "ar" ? "مسار Java" : "Java path"}</dt><dd>{system.java_path}</dd></div>}
                       <div><dt>{t.totalMemory}</dt><dd>{Math.round(system.total_ram_mb / 1024)} GB</dd></div>
                       <div className="directory-row"><dt>{t.dataDirectory}</dt><dd>{system.launcher_dir}</dd></div>
                     </dl>
