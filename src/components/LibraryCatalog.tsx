@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { Blocks, Package, RefreshCw, FileUp, FolderOpen, Download, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Blocks, Package, RefreshCw, FileUp, Download, AlertCircle, CheckCircle2 } from "lucide-react";
 import type { Language } from "../locales/translations";
 import ModrinthCatalog from "./ModrinthCatalog";
 
