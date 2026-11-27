@@ -1,6 +1,8 @@
 use serde::Serialize;
+use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 use sysinfo::System;
+use tauri::Manager;
 
 #[derive(Serialize)]
 struct SystemEnvironment {
@@ -10,12 +12,19 @@ struct SystemEnvironment {
     launcher_dir: String,
 }
 
+fn config_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app.path().app_config_dir()
+        .map_err(|error| format!("Could not resolve app config directory: {error}"))?;
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("Could not create app config directory: {error}"))?;
+    Ok(dir.join("config.json"))
+}
+
 #[tauri::command]
 fn get_system_environment() -> Result<SystemEnvironment, String> {
     let mut system = System::new();
     system.refresh_memory();
     let total_ram_mb = system.total_memory() / (1024 * 1024);
-
     let data_dir: PathBuf = dirs::data_dir()
         .ok_or_else(|| "The operating system did not provide an application data directory".to_string())?;
     let launcher_dir = data_dir.join("DRAGONLauncher");
@@ -30,10 +39,46 @@ fn get_system_environment() -> Result<SystemEnvironment, String> {
     })
 }
 
+#[tauri::command]
+fn load_launcher_config(app: tauri::AppHandle) -> Result<Value, String> {
+    let path = config_file(&app)?;
+    if !path.exists() {
+        return Ok(json!({
+            "ram_mb": 4096,
+            "game_directory": "",
+            "java_path": "",
+            "window_width": 1280,
+            "window_height": 720,
+            "language": "ar"
+        }));
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("Could not read config.json: {error}"))?;
+    serde_json::from_str(&content)
+        .map_err(|error| format!("config.json contains invalid JSON: {error}"))
+}
+
+#[tauri::command]
+fn save_launcher_config(app: tauri::AppHandle, config: Value) -> Result<(), String> {
+    let path = config_file(&app)?;
+    let serialized = serde_json::to_vec_pretty(&config)
+        .map_err(|error| format!("Could not serialize launcher settings: {error}"))?;
+    let temporary = path.with_extension("json.tmp");
+    fs::write(&temporary, serialized)
+        .map_err(|error| format!("Could not write launcher settings: {error}"))?;
+    fs::rename(&temporary, &path)
+        .map_err(|error| format!("Could not replace config.json: {error}"))?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment])
+        .invoke_handler(tauri::generate_handler![
+            get_system_environment,
+            load_launcher_config,
+            save_launcher_config
+        ])
         .run(tauri::generate_context!())
         .expect("Failed to run DRAGON Launcher");
 }
