@@ -145,7 +145,7 @@ async fn download_java_runtime(
     }
     let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(5)).build()
         .map_err(|e| format!("Could not create download client: {e}"))?;
-    let response = client.get(url).send().await.map_err(|e| format!("Java download failed: {e}"))?;
+    let response = client.get(url.clone()).send().await.map_err(|e| format!("Java download failed: {e}"))?;
     if !response.status().is_success() { return Err(format!("Java download returned HTTP {}", response.status())); }
     let final_host = response.url().host_str().unwrap_or_default();
     if !matches!(final_host, "github.com" | "githubusercontent.com" | "objects.githubusercontent.com") {
