@@ -235,7 +235,7 @@ async fn download_modrinth_file(_app: tauri::AppHandle, url: String, filename: S
 #[tauri::command]
 fn import_external_mod(filename: String, data_base64: String) -> Result<String, String> {
     if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".jar")
-        || filename.contains('/') || filename.contains('\\\\')
+        || filename.contains('/') || filename.contains('\\')
         || filename == "." || filename == ".." {
         return Err("Choose a valid .jar mod file".to_string());
     }
@@ -267,10 +267,8 @@ fn import_external_mod(filename: String, data_base64: String) -> Result<String, 
 fn read_game_log() -> Result<String, String> {
     let path = launcher_data_dir()?.join("game").join("logs").join("latest.log");
     if !path.exists() { return Ok(String::new()); }
-    let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
     let mut content = fs::read_to_string(&path).map_err(|e| format!("Could not read Minecraft log: {e}"))?;
     if content.len() > 1_000_000 { content = content.split_off(content.len() - 1_000_000); }
-    let _ = metadata;
     Ok(content)
 }
 
