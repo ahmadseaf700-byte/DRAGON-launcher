@@ -197,6 +197,7 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
                     let excludes = library.pointer("/extract/exclude").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
                     extract_native_archive(&archive_path, &natives_dir, &excludes)?;
                     installed_natives += 1;
+                    let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"natives","done":installed_natives,"total":libraries.len()}));
                 }
             }
         }
