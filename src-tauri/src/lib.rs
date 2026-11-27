@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use std::{collections::HashMap, fs, io::{self, Read, Write}, net::{TcpStream, ToSocketAddrs}, path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{Mutex, OnceLock}, time::{Duration, Instant}};
 use sysinfo::System;
 use tauri::{Emitter, Manager};
@@ -108,6 +109,75 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
     }
     fs::rename(&temporary, destination).map_err(|e| format!("Could not finalize download: {e}"))?;
     Ok(bytes.len() as u64)
+}
+
+#[derive(Serialize)]
+struct JavaRuntimeInstallResult {
+    archive_path: String,
+    bytes: u64,
+    sha256: String,
+    java_major: u32,
+}
+
+#[tauri::command]
+async fn download_java_runtime(
+    download_url: String,
+    checksum_sha256: String,
+    archive_size: Option<u64>,
+    java_major: u32,
+    platform: String,
+) -> Result<JavaRuntimeInstallResult, String> {
+    if !(8..=99).contains(&java_major) {
+        return Err("Invalid Java major version".to_string());
+    }
+    if checksum_sha256.len() != 64 || !checksum_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("The official package did not provide a valid SHA-256 checksum; download refused.".to_string());
+    }
+    let url = reqwest::Url::parse(&download_url).map_err(|e| format!("Invalid package URL: {e}"))?;
+    if url.scheme() != "https" || !matches!(url.host_str(), Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com")) {
+        return Err("Refusing a download outside approved HTTPS hosts".to_string());
+    }
+    if !matches!(platform.as_str(), "windows-x64" | "windows-aarch64" | "linux-x64" | "linux-aarch64" | "mac-x64" | "mac-aarch64") {
+        return Err("Unsupported Java runtime platform".to_string());
+    }
+    if archive_size.map(|n| n > 512 * 1024 * 1024).unwrap_or(false) {
+        return Err("Java archive exceeds the 512 MB safety limit".to_string());
+    }
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(5)).build()
+        .map_err(|e| format!("Could not create download client: {e}"))?;
+    let response = client.get(url).send().await.map_err(|e| format!("Java download failed: {e}"))?;
+    if !response.status().is_success() { return Err(format!("Java download returned HTTP {}", response.status())); }
+    let final_host = response.url().host_str().unwrap_or_default();
+    if !matches!(final_host, "github.com" | "githubusercontent.com" | "objects.githubusercontent.com") {
+        return Err("Download redirected outside approved HTTPS hosts".to_string());
+    }
+    if let Some(expected) = archive_size {
+        if response.content_length().map(|n| n != expected).unwrap_or(false) {
+            return Err("Downloaded archive size does not match the official manifest".to_string());
+        }
+    }
+    let bytes = response.bytes().await.map_err(|e| format!("Could not read Java archive: {e}"))?;
+    if bytes.is_empty() || bytes.len() as u64 > 512 * 1024 * 1024 {
+        return Err("Downloaded Java archive is empty or exceeds 512 MB".to_string());
+    }
+    if archive_size.map(|n| n != bytes.len() as u64).unwrap_or(false) {
+        return Err("Downloaded archive size failed verification".to_string());
+    }
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    if !digest.eq_ignore_ascii_case(&checksum_sha256) {
+        return Err("SHA-256 verification failed. The archive was not saved.".to_string());
+    }
+    let file_name = url.path_segments().and_then(|mut parts| parts.next_back())
+        .filter(|name| !name.is_empty() && name.len() < 180 && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)))
+        .ok_or("Unsafe Java archive filename")?;
+    let runtime_dir = launcher_data_dir()?.join("runtimes").join(format!("java-{java_major}")).join(&platform);
+    fs::create_dir_all(&runtime_dir).map_err(|e| format!("Could not create Java runtime directory: {e}"))?;
+    let destination = runtime_dir.join(file_name);
+    let temporary = runtime_dir.join(format!("{file_name}.download.tmp"));
+    fs::write(&temporary, &bytes).map_err(|e| format!("Could not save Java archive: {e}"))?;
+    if destination.exists() { fs::remove_file(&destination).map_err(|e| format!("Could not replace old archive: {e}"))?; }
+    fs::rename(&temporary, &destination).map_err(|e| format!("Could not finalize Java archive: {e}"))?;
+    Ok(JavaRuntimeInstallResult { archive_path: destination.to_string_lossy().to_string(), bytes: bytes.len() as u64, sha256: digest, java_major })
 }
 
 fn library_allowed(library: &Value) -> bool {
@@ -1230,7 +1300,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, get_java_runtime_download, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, get_java_runtime_download, download_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
