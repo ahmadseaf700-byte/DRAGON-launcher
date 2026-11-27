@@ -47,8 +47,8 @@ export default function KeybindsPanel({ lang }: { lang: Language }) {
       const fileText = await file.text();
       let incoming: any;
       if (file.name.toLowerCase().endsWith(".txt")) {
-        incoming = fileText.split(/\\r?\\n/).flatMap(line => {
-          const match = line.match(/^(key_key\\.[^:]+):(.+)$/);
+        incoming = fileText.split(/\r?\n/).flatMap(line => {
+          const match = line.match(/^(key_key\.[^:]+):(.+)$/);
           if (!match) return [];
           const id = match[1].replace("key_key.", "");
           return [{ name: id.replaceAll("_", " "), key: match[2].trim().replace("key.keyboard.", "").replace("key.mouse.", "MOUSE_"), actions: [{ type: "press_key", value: match[2].trim() }] }];
