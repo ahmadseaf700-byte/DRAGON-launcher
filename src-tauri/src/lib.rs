@@ -289,9 +289,7 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
                 let sha = artifact.get("sha1").and_then(Value::as_str);
                 total_bytes += download_verified(&client, url, &root.join("libraries").join(relative), sha).await?;
                 installed_libraries += 1;
-                if installed_libraries % 10 == 0 {
-                    let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"libraries","done":installed_libraries,"total":libraries.len()}));
-                }
+                let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"libraries","done":installed_libraries,"total":libraries.len()}));
             }
         }
     }
@@ -313,9 +311,7 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
             let destination = root.join("assets").join("objects").join(&hash[0..2]).join(hash);
             total_bytes += download_verified(&client, &url, &destination, Some(hash)).await?;
             asset_count += 1;
-            if asset_count % 100 == 0 {
-                let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"assets","done":asset_count,"total":objects.len()}));
-            }
+            let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"assets","done":asset_count,"total":objects.len()}));
         }
     }
     if !is_minecraft_version_installed(version_id.clone())? {
