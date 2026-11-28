@@ -89,6 +89,32 @@ class DragonGameActivity : Activity() {
             })
         }
         frame.addView(controls, FrameLayout.LayoutParams(-1, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+
+        // Transparent right-side look pad. Events are queued for the future GLFW mouse callback.
+        val lookPad = View(this).apply {
+            var previousX = 0f
+            var previousY = 0f
+            setOnTouchListener { _, event ->
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        previousX = event.x
+                        previousY = event.y
+                        DragonInputQueue.push("look_start", 0, 0f, 0f)
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val dx = event.x - previousX
+                        val dy = event.y - previousY
+                        previousX = event.x
+                        previousY = event.y
+                        DragonInputQueue.push("mouse_move", 0, dx, dy)
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                        DragonInputQueue.push("look_end", 0, 0f, 0f)
+                }
+                true
+            }
+        }
+        frame.addView(lookPad, FrameLayout.LayoutParams(dp(190), dp(210), Gravity.END or Gravity.CENTER_VERTICAL))
         setContentView(frame)
 
         val nativeStatus = runCatching {
@@ -98,6 +124,8 @@ class DragonGameActivity : Activity() {
         val packageStatus = if (jvmLibrary.isFile) "libjvm.so found" else "libjvm.so missing"
         status.text = "DRAGON Android engine bootstrap\nMinecraft: $versionId · RAM: $ramMb MB\n$packageStatus\n$nativeStatus\n\nThe Minecraft engine is not linked yet. This screen verifies the Android surface and touch-event queue only."
     }
+
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     override fun onPause() {
         surface?.onPause()
