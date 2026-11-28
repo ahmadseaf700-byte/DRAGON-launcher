@@ -147,6 +147,9 @@ jobs:
       - name: Initialize Android project
         run: npm run tauri -- android init
 
+      - name: Inject DRAGON Android game bridge and native surface
+        run: python3 scripts/prepare-android-game.py
+
       - name: Cache Gradle distributions and dependencies
         uses: actions/cache@v4
         with:
