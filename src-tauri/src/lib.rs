@@ -1096,7 +1096,7 @@ fn list_game_instances() -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
-fn create_game_instance(name: String, version_id: String) -> Result<Value, String> {
+fn create_game_instance(name: String, version_id: String, loader: String) -> Result<Value, String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 40 || name.chars().any(|c| c.is_control()) {
         return Err("اسم النسخة يجب أن يكون بين 1 و40 حرفاً.".to_string());
@@ -1104,6 +1104,9 @@ fn create_game_instance(name: String, version_id: String) -> Result<Value, Strin
     if version_id.is_empty() || version_id.len() > 64
         || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
+    }
+    if !matches!(loader.as_str(), "fabric" | "forge" | "neoforge" | "quilt" | "vanilla") {
+        return Err("Unsupported mod loader".to_string());
     }
     let root = launcher_data_dir()?.join("instances");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
@@ -1121,6 +1124,7 @@ fn create_game_instance(name: String, version_id: String) -> Result<Value, Strin
         "id": id,
         "name": name,
         "version_id": version_id,
+        "loader": loader,
         "created_at": created_at,
         "game_directory": instance_dir.to_string_lossy()
     });
