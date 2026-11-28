@@ -358,21 +358,60 @@ fn install_java_runtime(
     Ok(JavaRuntimeInstallStatus { java_path: final_java.to_string_lossy().to_string(), java_version: version_text.trim().to_string(), java_major: actual_major })
 }
 
-fn library_allowed(library: &Value) -> bool {
-    let Some(rules) = library.get("rules").and_then(Value::as_array) else { return true; };
-    let os = match std::env::consts::OS { "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => "unsupported" };
-    let arch = std::env::consts::ARCH;
+fn current_minecraft_os() -> &'static str {
+    match std::env::consts::OS {
+        "windows" => "windows",
+        "macos" => "osx",
+        "linux" => "linux",
+        _ => "unsupported",
+    }
+}
+
+fn minecraft_arch_matches(expected: &str, actual: &str) -> bool {
+    match expected {
+        "x86" | "i386" | "i686" => actual == "x86",
+        "x86_64" | "amd64" => actual == "x86_64",
+        "arm64" | "aarch64" => actual == "aarch64",
+        other => other == actual,
+    }
+}
+
+// Mojang rules are evaluated in order: the last matching rule wins.
+// Entries with no rules are allowed; entries with rules are denied by default.
+fn minecraft_rules_allow(
+    rules: Option<&Vec<Value>>,
+    os: &str,
+    arch: &str,
+    features: &HashMap<String, bool>,
+) -> bool {
+    let Some(rules) = rules else { return true; };
     let mut allowed = false;
     for rule in rules {
-        let action = rule.get("action").and_then(Value::as_str).unwrap_or("disallow");
         let os_rule = rule.get("os");
-        let name_matches = os_rule.and_then(|v| v.get("name")).and_then(Value::as_str)
-            .map(|name| name == os).unwrap_or(true);
-        let arch_matches = os_rule.and_then(|v| v.get("arch")).and_then(Value::as_str)
-            .map(|expected| expected == arch || (expected == "x86" && arch == "x86")).unwrap_or(true);
-        if name_matches && arch_matches { allowed = action == "allow"; }
+        let os_matches = os_rule.and_then(|value| value.get("name"))
+            .and_then(Value::as_str).map(|expected| expected == os).unwrap_or(true);
+        let arch_matches = os_rule.and_then(|value| value.get("arch"))
+            .and_then(Value::as_str).map(|expected| minecraft_arch_matches(expected, arch)).unwrap_or(true);
+        let features_match = rule.get("features").and_then(Value::as_object).map(|required| {
+            required.iter().all(|(name, expected)| {
+                let expected = expected.as_bool().unwrap_or(false);
+                features.get(name).copied().unwrap_or(false) == expected
+            })
+        }).unwrap_or(true);
+        if os_matches && arch_matches && features_match {
+            allowed = rule.get("action").and_then(Value::as_str) == Some("allow");
+        }
     }
     allowed
+}
+
+fn library_allowed(library: &Value) -> bool {
+    minecraft_rules_allow(
+        library.get("rules").and_then(Value::as_array),
+        current_minecraft_os(),
+        std::env::consts::ARCH,
+        &HashMap::new(),
+    )
 }
 
 fn safe_relative_path(raw: &str) -> Result<PathBuf, String> {
@@ -485,6 +524,53 @@ mod java_version_tests {
     #[test]
     fn rejects_unparseable_java_version_strings() {
         assert_eq!(parse_java_major("Java runtime version unknown"), None);
+    }
+}
+
+#[cfg(test)]
+mod minecraft_rule_tests {
+    use super::{minecraft_arch_matches, minecraft_rules_allow};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    #[test]
+    fn entries_without_rules_are_allowed() {
+        assert!(minecraft_rules_allow(None, "linux", "x86_64", &HashMap::new()));
+    }
+
+    #[test]
+    fn rules_default_to_denied_until_a_rule_matches() {
+        let rules = vec![json!({"action":"allow","os":{"name":"windows"}})];
+        assert!(!minecraft_rules_allow(Some(&rules), "linux", "x86_64", &HashMap::new()));
+        assert!(minecraft_rules_allow(Some(&rules), "windows", "x86_64", &HashMap::new()));
+    }
+
+    #[test]
+    fn last_matching_rule_overrides_previous_rule() {
+        let rules = vec![
+            json!({"action":"allow"}),
+            json!({"action":"disallow","os":{"name":"linux"}}),
+        ];
+        assert!(!minecraft_rules_allow(Some(&rules), "linux", "x86_64", &HashMap::new()));
+        assert!(minecraft_rules_allow(Some(&rules), "windows", "x86_64", &HashMap::new()));
+    }
+
+    #[test]
+    fn feature_rules_match_true_and_false_values() {
+        let rules = vec![json!({"action":"allow","features":{"has_custom_resolution":true}})];
+        let mut features = HashMap::new();
+        features.insert("has_custom_resolution".to_string(), true);
+        assert!(minecraft_rules_allow(Some(&rules), "linux", "x86_64", &features));
+        features.insert("has_custom_resolution".to_string(), false);
+        assert!(!minecraft_rules_allow(Some(&rules), "linux", "x86_64", &features));
+    }
+
+    #[test]
+    fn architecture_aliases_are_normalized() {
+        assert!(minecraft_arch_matches("amd64", "x86_64"));
+        assert!(minecraft_arch_matches("arm64", "aarch64"));
+        assert!(minecraft_arch_matches("i686", "x86"));
+        assert!(!minecraft_arch_matches("x86_64", "aarch64"));
     }
 }
 
@@ -826,33 +912,30 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
 }
 
 
-fn argument_rules_allow(item: &Value) -> bool {
-    let Some(rules) = item.get("rules").and_then(Value::as_array) else { return true; };
-    let os = match std::env::consts::OS {
-        "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => "unsupported"
-    };
-    let arch = std::env::consts::ARCH;
-    let mut allowed = false;
-    for rule in rules {
-        let os_rule = rule.get("os");
-        let os_match = os_rule.and_then(|v| v.get("name")).and_then(Value::as_str)
-            .map(|name| name == os).unwrap_or(true)
-            && os_rule.and_then(|v| v.get("arch")).and_then(Value::as_str)
-                .map(|value| value == arch || (value == "x86" && arch == "x86")).unwrap_or(true);
-        let features_match = rule.get("features").and_then(Value::as_object).map(|features| {
-            features.iter().all(|(_, expected)| expected.as_bool() == Some(false))
-        }).unwrap_or(true);
-        if os_match && features_match {
-            allowed = rule.get("action").and_then(Value::as_str) == Some("allow");
-        }
-    }
-    allowed
+fn launcher_feature_flags() -> HashMap<String, bool> {
+    HashMap::from([
+        ("is_demo_user".to_string(), false),
+        ("has_custom_resolution".to_string(), true),
+        ("has_quick_plays_support".to_string(), false),
+        ("is_quick_play_singleplayer".to_string(), false),
+        ("is_quick_play_multiplayer".to_string(), false),
+        ("is_quick_play_realms".to_string(), false),
+    ])
 }
 
-fn collect_argument_values(value: &Value, output: &mut Vec<String>) {
+fn argument_rules_allow(item: &Value, features: &HashMap<String, bool>) -> bool {
+    minecraft_rules_allow(
+        item.get("rules").and_then(Value::as_array),
+        current_minecraft_os(),
+        std::env::consts::ARCH,
+        features,
+    )
+}
+
+fn collect_argument_values(value: &Value, output: &mut Vec<String>, features: &HashMap<String, bool>) {
     match value {
         Value::String(text) => output.push(text.clone()),
-        Value::Object(_) if argument_rules_allow(value) => {
+        Value::Object(_) if argument_rules_allow(value, features) => {
             if let Some(value) = value.get("value") {
                 match value {
                     Value::String(text) => output.push(text.clone()),
@@ -1040,9 +1123,10 @@ fn launch_minecraft(
         result
     };
 
+    let features = launcher_feature_flags();
     let mut jvm_args = Vec::<String>::new();
     if let Some(items) = metadata.pointer("/arguments/jvm").and_then(Value::as_array) {
-        for item in items { collect_argument_values(item, &mut jvm_args); }
+        for item in items { collect_argument_values(item, &mut jvm_args, &features); }
     }
     for arg in &mut jvm_args { *arg = substitute(arg); }
     if !jvm_args.iter().any(|arg| arg.starts_with("-Djava.library.path=")) {
@@ -1062,7 +1146,7 @@ fn launch_minecraft(
     args.push(main_class.to_string());
     if let Some(items) = metadata.pointer("/arguments/game").and_then(Value::as_array) {
         let mut game_args = Vec::new();
-        for item in items { collect_argument_values(item, &mut game_args); }
+        for item in items { collect_argument_values(item, &mut game_args, &features); }
         args.extend(game_args.into_iter().map(|arg| substitute(&arg)));
     } else if let Some(old_args) = metadata.get("minecraftArguments").and_then(Value::as_str) {
         args.extend(old_args.split_whitespace().map(substitute));
