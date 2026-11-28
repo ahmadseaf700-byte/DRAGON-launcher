@@ -63,6 +63,7 @@ export default function App() {
         archivePath: downloaded.archive_path,
         sourceCommit: metadata.source_commit
       });
+      localStorage.setItem("dragon.androidJavaRuntimeDir", installed.runtime_dir);
       const sizeMb = (downloaded.bytes / 1024 / 1024).toFixed(1);
       setRuntimeDownloadMessage(lang === "ar"
         ? "تم تنزيل Java 21 وفك ملفات ARM64 والتحقق منها (" + sizeMb + " MB). المسار: " + installed.runtime_dir + ". ملفات Java مثبتة، لكن تشغيل JVM على Android لم يُفعّل بعد."
@@ -174,12 +175,31 @@ export default function App() {
   const handlePlay = async () => {
     setLaunchError(""); setLaunchMessage("");
     if (!native) { setLaunchError(lang === "ar" ? "شغّل نسخة التطبيق المثبتة لتشغيل Minecraft." : "Run the installed desktop app to launch Minecraft."); return; }
-    // The current Android APK is a Tauri shell only. Never proceed through the desktop
-    // Java/process path until a real Android JVM + game-window/input engine is integrated.
+    if (!effectiveVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
+    if (!versionInstalled) { setLaunchError(lang === "ar" ? "هذا الإصدار غير مثبت. نزّله أولاً من صفحة الإصدارات." : "Install this version first from Versions."); setActiveTab("versions"); return; }
     if (system?.os === "android") {
-      setLaunchError(lang === "ar"
-        ? "تشغيل Minecraft Java على Android غير متاح في هذا الإصدار بعد. ما زلنا نحتاج دمج محرك Android متكامل (JVM + LWJGL/GLFW + Renderer + شاشة وتحكم اللمس). لن يبدأ التنزيل أو التشغيل الوهمي."
-        : "Minecraft Java is not launchable on Android in this build yet. A complete Android engine (JVM + LWJGL/GLFW + renderer + game surface/touch input) still needs to be integrated. No fake launch or runtime download will be attempted.");
+      const runtimeDir = localStorage.getItem("dragon.androidJavaRuntimeDir") || "";
+      if (!runtimeDir) {
+        setLaunchError(lang === "ar"
+          ? "نزّل ملفات Java 21 ARM64 أولاً من بطاقة معلومات النظام. لم يتم تشغيل أي شيء."
+          : "Download the Java 21 ARM64 runtime files from the System card first. Nothing was launched.");
+        return;
+      }
+      setLaunching(true);
+      try {
+        await invoke("plugin:android-game|openGame", {
+          runtimeDir,
+          versionId: effectiveVersion,
+          ramMb: ramMB
+        });
+        setLaunchMessage(lang === "ar"
+          ? "فُتحت شاشة Android التمهيدية. هذه تختبر سطح OpenGL وأزرار اللمس وفحص JVM فقط؛ Minecraft نفسها لم تبدأ بعد لأن ربط JLI/LWJGL/GL4ES لم يكتمل."
+          : "Android bootstrap surface opened. This tests the OpenGL surface, touch queue and JVM probe only; Minecraft has not started because JLI/LWJGL/GL4ES integration is not complete.");
+      } catch (error) {
+        setLaunchError((lang === "ar" ? "تعذر فتح شاشة Android: " : "Could not open Android game surface: ") + String(error));
+      } finally {
+        setLaunching(false);
+      }
       return;
     }
     if (!effectiveVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
