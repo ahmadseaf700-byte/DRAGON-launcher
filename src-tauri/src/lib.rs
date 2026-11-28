@@ -19,6 +19,8 @@ struct SystemEnvironment {
     java_detected: bool,
     java_version: Option<String>,
     java_path: Option<String>,
+    java_runtime_installed: bool,
+    java_runtime_dir: Option<String>,
 }
 
 #[cfg(target_os = "android")]
@@ -1541,6 +1543,23 @@ fn open_instance_folder(instance_id: String, folder: String) -> Result<(), Strin
     result.map(|_| ()).map_err(|e| format!("تعذر فتح المجلد: {e}"))
 }
 
+#[cfg(target_os = "android")]
+fn installed_android_java_runtime() -> (bool, Option<String>) {
+    let Ok(data_dir) = launcher_data_dir() else { return (false, None); };
+    let runtime = data_dir.join("runtimes").join("jre-21").join("runtime");
+    let jvm = runtime.join("lib").join("server").join("libjvm.so");
+    let jli = runtime.join("lib").join("libjli.so");
+    let release = runtime.join("release");
+    let is_java21 = fs::read_to_string(&release).map(|text| {
+        text.lines().any(|line| line.trim().starts_with(r#"JAVA_VERSION="21"#))
+    }).unwrap_or(false);
+    let installed = jvm.is_file() && jli.is_file() && is_java21;
+    (installed, if installed { Some(runtime.to_string_lossy().into_owned()) } else { None })
+}
+
+#[cfg(not(target_os = "android"))]
+fn installed_android_java_runtime() -> (bool, Option<String>) { (false, None) }
+
 #[tauri::command]
 fn get_system_environment() -> Result<SystemEnvironment, String> {
     let mut system = System::new();
@@ -1548,11 +1567,12 @@ fn get_system_environment() -> Result<SystemEnvironment, String> {
     let total_ram_mb = system.total_memory() / (1024 * 1024);
     let launcher_dir = launcher_data_dir()?;
     let (java_detected, java_version, java_path) = detect_java_runtime();
+    let (java_runtime_installed, java_runtime_dir) = installed_android_java_runtime();
     let runtime_target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
     Ok(SystemEnvironment { os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(), total_ram_mb,
         launcher_dir: launcher_dir.to_string_lossy().into_owned(),
-        runtime_target, java_detected, java_version, java_path })
+        runtime_target, java_detected, java_version, java_path, java_runtime_installed, java_runtime_dir })
 }
 
 #[tauri::command]
