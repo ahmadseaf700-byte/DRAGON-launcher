@@ -259,3 +259,35 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .launch-feedback { margin: 10px 0; padding: 12px 14px; border-radius: 10px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
 .launch-feedback.is-success { border: 1px solid rgba(16,185,129,.3); background: rgba(16,185,129,.08); color: #a7f3d0; }
 .launch-feedback.is-error { border: 1px solid rgba(248,113,113,.35); background: rgba(248,113,113,.08); color: #fecaca; }
+
+
+/* Professional Modrinth library controls */
+.mod-category-row { display: flex; gap: 7px; overflow-x: auto; padding: 3px 1px 8px; scrollbar-width: thin; }
+.mod-category-row button { flex: 0 0 auto; min-height: 31px; padding: 0 11px; color: #aeb8ca; border: 1px solid #30394d; border-radius: 999px; background: #111725; font-size: 10px; cursor: pointer; white-space: nowrap; }
+.mod-category-row button.selected { color: #fff; border-color: rgba(251,130,149,.65); background: rgba(181,43,74,.25); }
+.modrinth-filter-row label > span { display: inline-flex; align-items: center; gap: 5px; }
+.mod-card-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 5px; }
+.mod-card-meta small { display: inline-flex; align-items: center; gap: 4px; color: #8995aa; font-size: 9px; }
+.mod-result-actions button.is-installed { color: #86efac; border: 1px solid rgba(74,222,128,.25); background: rgba(22,101,52,.22); cursor: default; }
+.mod-download-progress { padding: 11px 13px; border: 1px solid #343d52; border-radius: 10px; background: rgba(12,17,28,.75); }
+.mod-download-progress > div:first-child { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: #cbd5e1; font-size: 10px; }
+.mod-download-progress strong { color: #fb9aaa; }
+.mod-progress-track { height: 6px; overflow: hidden; border-radius: 999px; background: #252d3e; }
+.mod-progress-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #a8324d, #fb8295); transition: width .18s ease; }
+.mod-refresh-button { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; color: #cbd5e1; border: 1px solid #343d52; border-radius: 8px; background: #151c2a; font-size: 10px; cursor: pointer; }
+.installed-mod-list { display: flex; flex-direction: column; gap: 8px; }
+.installed-mod-card { min-width: 0; display: flex; align-items: center; gap: 10px; padding: 11px; border: 1px solid #30394d; border-radius: 11px; background: rgba(12,17,28,.7); }
+.installed-mod-card.disabled { opacity: .72; }
+.installed-mod-icon { width: 36px; height: 36px; flex: 0 0 auto; display: grid; place-items: center; color: #fb8295; border-radius: 9px; background: rgba(181,43,74,.14); }
+.installed-mod-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 4px; }
+.installed-mod-copy strong { overflow: hidden; color: #e5eaf3; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.installed-mod-copy small { color: #8490a5; font-size: 9px; }
+.mod-toggle-button, .mod-delete-button { min-height: 32px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 0 9px; color: #dbe3f0; border: 1px solid #39445a; border-radius: 8px; background: #192233; font-size: 9px; cursor: pointer; }
+.mod-toggle-button.active { color: #fda4af; }
+.mod-delete-button { width: 32px; padding: 0; color: #fca5a5; border-color: rgba(248,113,113,.25); background: rgba(127,29,29,.15); }
+.mod-toggle-button:disabled, .mod-delete-button:disabled, .mod-refresh-button:disabled { opacity: .5; cursor: wait; }
+@media (max-width: 600px) {
+  .installed-mod-card { flex-wrap: wrap; }
+  .installed-mod-copy { width: calc(100% - 54px); flex: none; }
+  .mod-toggle-button { margin-inline-start: auto; }
+}
