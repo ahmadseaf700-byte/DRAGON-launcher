@@ -9,6 +9,6 @@
     "core:default",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "android-game:default"
+    "android-game:allow-open-game"
   ]
 }
