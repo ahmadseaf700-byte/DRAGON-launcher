@@ -312,8 +312,9 @@ async fn get_android_java_runtime_download() -> Result<AndroidJavaRuntimeDownloa
         .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
         .ok_or("GitHub did not provide a valid SHA-256 digest for the Java artifact")?
         .to_string();
+    let expected_download_url = format!("https://api.github.com/repos/{SOURCE_REPO}/actions/artifacts/{artifact_id}/zip");
     let download_url = artifact.get("archive_download_url").and_then(Value::as_str)
-        .filter(|url| url.starts_with("https://api.github.com/repos/PojavLauncherTeam/android-openjdk-build-multiarch/actions/artifacts/"))
+        .filter(|url| *url == expected_download_url)
         .ok_or("GitHub returned an unexpected Java artifact download URL")?
         .to_string();
 
@@ -321,7 +322,6 @@ async fn get_android_java_runtime_download() -> Result<AndroidJavaRuntimeDownloa
     if artifact.get("workflow_run").and_then(|v| v.get("id")).and_then(Value::as_u64) != Some(run_id) {
         return Err("Java artifact does not belong to the selected successful workflow run".to_string());
     }
-    let _ = artifact_id; // Kept explicit for traceability in the validated artifact metadata.
     Ok(AndroidJavaRuntimeDownload {
         download_url,
         checksum_sha256: digest,
