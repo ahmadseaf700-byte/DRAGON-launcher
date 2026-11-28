@@ -115,6 +115,12 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
 
+      - name: Install frontend dependencies
+        run: npm install
+
+      - name: Generate application icons
+        run: npm run tauri -- icon src-tauri/icons/dragon.svg --output ./src-tauri/icons
+
       - name: Run Rust unit tests
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
@@ -137,9 +143,6 @@ jobs:
           else
             echo "cargo-ndk already restored from cache"
           fi
-
-      - name: Install frontend dependencies
-        run: npm install
 
       - name: Initialize Android project
         run: npm run tauri -- android init
