@@ -1105,7 +1105,7 @@ fn create_game_instance(name: String, version_id: String, loader: String) -> Res
         || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
     }
-    if !matches!(loader.as_str(), "fabric" | "forge" | "neoforge" | "quilt" | "vanilla") {
+    if !matches!(loader.as_str(), "fabric" | "forge" | "neoforge" | "quilt") {
         return Err("Unsupported mod loader".to_string());
     }
     let root = launcher_data_dir()?.join("instances");
