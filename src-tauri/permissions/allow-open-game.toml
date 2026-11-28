@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "allow-open-game"
+description = "Allows the frontend to open the native Android game bootstrap activity."
+commands.allow = ["openGame"]
