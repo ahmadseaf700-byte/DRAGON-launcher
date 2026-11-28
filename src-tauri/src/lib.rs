@@ -481,8 +481,11 @@ fn install_android_java21_runtime(
                 if expanded > 2 * 1024 * 1024 * 1024 {
                     return Err("Expanded Java runtime exceeds the 2 GB installation limit".to_string());
                 }
-                item.unpack_in(&staging)
+                let unpacked = item.unpack_in(&staging)
                     .map_err(|e| format!("Could not unpack Java runtime file {}: {e}", path.display()))?;
+                if !unpacked {
+                    return Err(format!("Java runtime entry escaped the staging directory: {}", path.display()));
+                }
             }
             fs::remove_file(&component).map_err(|e| format!("Could not remove temporary component {member}: {e}"))?;
         }
@@ -493,7 +496,7 @@ fn install_android_java21_runtime(
         }
         let release_text = fs::read_to_string(&release)
             .map_err(|e| format!("Could not verify Java release metadata: {e}"))?;
-        if !release_text.lines().any(|line| line.trim() == "JAVA_VERSION=\\"21\\"") {
+        if !release_text.lines().any(|line| line.trim().starts_with("JAVA_VERSION=\\\"21")) {
             return Err("Extracted runtime is not Java 21".to_string());
         }
         Ok(())
