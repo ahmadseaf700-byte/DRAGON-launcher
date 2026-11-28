@@ -15,9 +15,9 @@ type DownloadProgress = { downloadId: string; received: number; total: number };
 const CATEGORIES = [
   { id: "optimization", ar: "تحسين الأداء", en: "Optimization" },
   { id: "utility", ar: "أدوات ومساعدات", en: "Utility" },
-  { id: "combat", ar: "قتال وPvP", en: "Combat / PvP" },
+  { id: "equipment", ar: "قتال وPvP", en: "Combat / PvP" },
   { id: "adventure", ar: "العالم والمغامرات", en: "Adventure" },
-  { id: "visual", ar: "إضافات بصرية", en: "Visuals" },
+  { id: "decoration", ar: "إضافات بصرية", en: "Visuals" },
   { id: "worldgen", ar: "توليد العالم", en: "World generation" },
   { id: "technology", ar: "تقنيات", en: "Technology" },
 ];
