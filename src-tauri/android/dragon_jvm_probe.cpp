@@ -99,7 +99,9 @@ Java_com_dragonlauncher_desktop_DragonGameActivity_startJvmSmokeTest(
     options[1].optionString = class_path_option.data();
 
     JavaVMInitArgs args{};
-    args.version = JNI_VERSION_1_8;
+    // Android NDK headers expose JNI 1.6 as the portable supported invocation API level.
+    // A Java 21 VM remains compatible with this JNI interface version.
+    args.version = JNI_VERSION_1_6;
     args.nOptions = 2;
     args.options = options;
     args.ignoreUnrecognized = JNI_TRUE;
