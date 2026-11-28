@@ -294,7 +294,7 @@ export default function App() {
                 <Square size={16} fill="currentColor" />{stoppingGame ? (lang === "ar" ? "جارٍ الإيقاف..." : "Stopping...") : (lang === "ar" ? "إيقاف" : "Stop")}
               </button>
             ) : (
-              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || !selectedVersion || !native || !versionInstalled || checkingVersion} title={!native ? (lang === "ar" ? "يتطلب تطبيق سطح المكتب" : "Desktop app required") : !selectedVersion ? (lang === "ar" ? "اختر إصداراً أولاً" : "Select a version first") : !versionInstalled ? (lang === "ar" ? "ثبّت الإصدار أولاً" : "Install the version first") : ""}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
+              <button className="play-button" onClick={() => void handlePlay()} disabled={launching || checkingVersion} title={launching ? (lang === "ar" ? "جارٍ التشغيل" : "Launching") : checkingVersion ? (lang === "ar" ? "جارٍ التحقق من الإصدار" : "Checking version") : (lang === "ar" ? "اضغط لمعرفة ما يلزم لتشغيل اللعبة" : "Press to see what is needed to launch")}><Play size={17} fill="currentColor" />{launching ? (lang === "ar" ? "جارٍ التشغيل..." : "Launching...") : t.play}</button>
             )}
           </footer>
           <p className="footer-note">DRAGON LAUNCHER <span>•</span> BUILT FOR YOUR WORLDS</p>
