@@ -1273,7 +1273,7 @@ fn list_installed_mods(app: tauri::AppHandle, instance_id: Option<String>) -> Re
 
 #[tauri::command]
 fn set_mod_enabled(app: tauri::AppHandle, instance_id: Option<String>, filename: String, enabled: bool) -> Result<String, String> {
-    if filename.is_empty() || filename.len() > 220 || filename.contains('/') || filename.contains('\\\\') || filename.contains("..") {
+    if filename.is_empty() || filename.len() > 220 || filename.contains('/') || filename.contains('\\') || filename.contains("..") {
         return Err("Invalid mod filename".to_string());
     }
     let lower = filename.to_ascii_lowercase();
@@ -1296,7 +1296,7 @@ fn set_mod_enabled(app: tauri::AppHandle, instance_id: Option<String>, filename:
 
 #[tauri::command]
 fn delete_installed_mod(app: tauri::AppHandle, instance_id: Option<String>, filename: String) -> Result<(), String> {
-    if filename.is_empty() || filename.len() > 220 || filename.contains('/') || filename.contains('\\\\') || filename.contains("..") {
+    if filename.is_empty() || filename.len() > 220 || filename.contains('/') || filename.contains('\\') || filename.contains("..") {
         return Err("Invalid mod filename".to_string());
     }
     let lower = filename.to_ascii_lowercase();
