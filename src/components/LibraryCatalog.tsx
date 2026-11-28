@@ -68,7 +68,7 @@ function InstalledModsPanel({ lang, instanceId }: { lang: Language; instanceId?:
 }
 
 export default function LibraryCatalog({ lang, instanceId, instanceVersion, instanceLoader }: {
-  lang: Language; instanceId?: string | null; instanceVersion?: string; instanceLoader?: string;
+  lang: Language; instanceId?: string | null; instanceVersion?: string | null; instanceLoader?: string;
 }) {
   const [view, setView] = useState<"mod" | "modpack" | "installed">("mod");
   const ar = lang === "ar";
