@@ -283,6 +283,7 @@ export default function App() {
                 <article className="panel-card">
                   <div className="panel-title"><span className="card-icon"><Cpu size={19} /></span><div><h3>{t.system}</h3><p>{lang === "ar" ? "ملخص بيئة التشغيل الحالية" : "Current runtime environment"}</p></div></div>
                   {system ? (
+                    <>
                     <dl className="system-list">
                       <div><dt>{t.operatingSystem}</dt><dd>{system.os}</dd></div>
                       <div><dt>{t.architecture}</dt><dd>{system.arch}</dd></div>
@@ -303,6 +304,7 @@ export default function App() {
                         {runtimeDownloadMessage && <p className="memory-note" role="status">{runtimeDownloadMessage}</p>}
                       </div>
                     )}
+                    </>
                   ) : <div className="empty-state">{systemError ? t.unavailable : native ? t.loading : t.unavailable}</div>}
                 </article>
                 <article className="panel-card memory-card">
