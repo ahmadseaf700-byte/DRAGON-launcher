@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 constexpr const char* TAG = "DragonJvmBridge";
@@ -76,14 +77,11 @@ Java_com_dragonlauncher_desktop_DragonGameActivity_startJvmSmokeTest(
     }
 
     const std::string jvm_path = join(server_dir, "libjvm.so");
-    std::string load_error;
-    if (!loadLibrary(jvm_path, load_error)) {
-        return result(env, "JVM load failed: " + load_error);
-    }
+    dlerror();
     g_jvm_handle = dlopen(jvm_path.c_str(), RTLD_NOW | RTLD_GLOBAL);
     if (g_jvm_handle == nullptr) {
         const char* detail = dlerror();
-        return result(env, std::string("JVM handle unavailable: ") +
+        return result(env, std::string("JVM load failed: ") +
             (detail == nullptr ? "unknown linker error" : detail));
     }
 
