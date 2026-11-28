@@ -38,7 +38,7 @@ if ".DragonGameActivity" not in manifest_text:
     manifest_text = manifest_text.replace("</application>", declaration + "    </application>")
 manifest.write_text(manifest_text, encoding="utf-8")
 
-gradle = GENERATED.parent / "build.gradle.kts"
+gradle = GENERATED.parent.parent / "build.gradle.kts"
 if not gradle.is_file():
     raise SystemExit("Expected generated app/build.gradle.kts; refusing an unverified Gradle edit")
 text = gradle.read_text(encoding="utf-8")
