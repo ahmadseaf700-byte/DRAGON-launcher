@@ -1308,7 +1308,7 @@ fn delete_installed_mod(app: tauri::AppHandle, instance_id: Option<String>, file
 }
 
 #[tauri::command]
-async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String, instance_id: Option<String>) -> Result<String, String> {
+async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String, instance_id: Option<String>, download_id: String) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid download URL: {e}"))?;
     if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
         return Err("Downloads are only allowed from the official Modrinth CDN over HTTPS".to_string());
@@ -1331,12 +1331,15 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     if response.content_length().map(|length| length > max_bytes as u64).unwrap_or(false) {
         return Err("The selected Modrinth file exceeds the allowed download size".to_string());
     }
+    let total_bytes = response.content_length().unwrap_or(0);
     let mut bytes = Vec::new();
+    let _ = app.emit("mod-download-progress", json!({"downloadId":download_id,"received":0,"total":total_bytes}));
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
         if bytes.len().saturating_add(chunk.len()) > max_bytes {
             return Err("The selected Modrinth file exceeds the allowed download size".to_string());
         }
         bytes.extend_from_slice(&chunk);
+        let _ = app.emit("mod-download-progress", json!({"downloadId":download_id,"received":bytes.len(),"total":total_bytes}));
     }
     if bytes.is_empty() { return Err("The downloaded file is empty".to_string()); }
     let data_dir = launcher_data_dir()?;
