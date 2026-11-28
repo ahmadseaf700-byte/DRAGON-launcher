@@ -381,10 +381,18 @@ async fn download_java_runtime(
     if !digest.eq_ignore_ascii_case(&checksum_sha256) {
         return Err("SHA-256 verification failed. The archive was not saved.".to_string());
     }
-    let file_name = url.path_segments().and_then(|mut parts| parts.next_back())
-        .filter(|name| !name.is_empty() && name.len() < 180 && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)))
-        .ok_or("Unsafe Java archive filename")?;
-    let runtime_dir = launcher_data_dir()?.join("runtimes").join(format!("java-{java_major}")).join(&platform);
+    let file_name = if platform == "android-aarch64" {
+        "jre21-pojav-artifact.zip".to_string()
+    } else {
+        url.path_segments().and_then(|mut parts| parts.next_back())
+            .filter(|name| !name.is_empty() && name.len() < 180 && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)))
+            .ok_or("Unsafe Java archive filename")?.to_string()
+    };
+    let runtime_dir = if platform == "android-aarch64" {
+        launcher_data_dir()?.join("runtimes").join("jre-21").join("downloads")
+    } else {
+        launcher_data_dir()?.join("runtimes").join(format!("java-{java_major}")).join(&platform)
+    };
     fs::create_dir_all(&runtime_dir).map_err(|e| format!("Could not create Java runtime directory: {e}"))?;
     let destination = runtime_dir.join(&file_name);
     let temporary = runtime_dir.join(format!("{file_name}.download.tmp"));
