@@ -25,9 +25,13 @@ export default function VersionCatalog({ lang, selectedVersion, onSelect }: {
   const load = async () => {
     setLoading(true); setError("");
     try {
-      const response = await fetch("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", { headers: { Accept: "application/json" } });
-      if (!response.ok) throw new Error("Mojang returned HTTP " + response.status);
-      const manifest = await response.json() as Manifest;
+      const manifest = native
+        ? await invoke<Manifest>("get_minecraft_version_manifest")
+        : await (async () => {
+            const response = await fetch("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json", { headers: { Accept: "application/json" } });
+            if (!response.ok) throw new Error("Mojang returned HTTP " + response.status);
+            return await response.json() as Manifest;
+          })();
       if (!Array.isArray(manifest.versions)) throw new Error("Invalid Mojang version manifest");
       setVersions(manifest.versions);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); }

@@ -14,13 +14,17 @@ import KeybindsPanel from "./components/KeybindsPanel";
 import ServersPanel from "./components/ServersPanel";
 import InstancesPanel from "./components/InstancesPanel";
 
-interface GameInstance { id: string; name: string; version_id: string; created_at: number; game_directory: string; }
+interface GameInstance { id: string; name: string; version_id: string; created_at: number; game_directory: string; loader?: string; }
 
 interface SystemEnv {
   os: string;
   arch: string;
   total_ram_mb: number;
   launcher_dir: string;
+  runtime_target: string;
+  java_detected: boolean;
+  java_version: string | null;
+  java_path: string | null;
 }
 
 export default function App() {
@@ -32,6 +36,7 @@ export default function App() {
   const [launchMessage, setLaunchMessage] = useState("");
   const [launchError, setLaunchError] = useState("");
   const [versionInstalled, setVersionInstalled] = useState(false);
+  const [javaCompatibility, setJavaCompatibility] = useState<string>("");
   const [checkingVersion, setCheckingVersion] = useState(false);
   const [activeGamePid, setActiveGamePid] = useState<number | null>(null);
   const [selectedInstance, setSelectedInstance] = useState<GameInstance | null>(() => { try { const raw = localStorage.getItem("dragon.activeInstance"); return raw ? JSON.parse(raw) as GameInstance : null; } catch { return null; } });
@@ -49,6 +54,16 @@ export default function App() {
     invoke<SystemEnv>("get_system_environment").then(setSystem).catch(() => setSystemError(true));
   }, [native]);
 
+
+  useEffect(() => {
+    let cancelled = false;
+    setJavaCompatibility("");
+    if (!native || !effectiveVersion || !versionInstalled) return;
+    invoke<{ compatible: boolean; message: string }>("check_java_compatibility", { versionId: effectiveVersion })
+      .then(result => { if (!cancelled) setJavaCompatibility(result.message); })
+      .catch(error => { if (!cancelled) setJavaCompatibility(String(error)); });
+    return () => { cancelled = true; };
+  }, [native, effectiveVersion, versionInstalled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +144,14 @@ export default function App() {
   const handlePlay = async () => {
     setLaunchError(""); setLaunchMessage("");
     if (!native) { setLaunchError(lang === "ar" ? "شغّل نسخة التطبيق المثبتة لتشغيل Minecraft." : "Run the installed desktop app to launch Minecraft."); return; }
+    // The current Android APK is a Tauri shell only. Never proceed through the desktop
+    // Java/process path until a real Android JVM + game-window/input engine is integrated.
+    if (system?.os === "android") {
+      setLaunchError(lang === "ar"
+        ? "تشغيل Minecraft Java على Android غير متاح في هذا الإصدار بعد. ما زلنا نحتاج دمج محرك Android متكامل (JVM + LWJGL/GLFW + Renderer + شاشة وتحكم اللمس). لن يبدأ التنزيل أو التشغيل الوهمي."
+        : "Minecraft Java is not launchable on Android in this build yet. A complete Android engine (JVM + LWJGL/GLFW + renderer + game surface/touch input) still needs to be integrated. No fake launch or runtime download will be attempted.");
+      return;
+    }
     if (!effectiveVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
     if (!versionInstalled) { setLaunchError(lang === "ar" ? "هذا الإصدار غير مثبت. نزّله أولاً من صفحة الإصدارات." : "This version is not installed. Install it from Versions first."); setActiveTab("versions"); return; }
     let accounts: Array<{ id: string; username: string; uuid: string }> = [];
@@ -192,7 +215,7 @@ export default function App() {
            ) : activeTab === "instances" ? (
             <InstancesPanel lang={lang} selectedId={selectedInstance?.id ?? null} onSelect={(item) => { setSelectedInstance(item); if (item) localStorage.setItem("dragon.activeInstance", JSON.stringify(item)); else localStorage.removeItem("dragon.activeInstance"); setLaunchMessage(item ? (lang === "ar" ? `النسخة المحددة: ${item.name}` : `Selected instance: ${item.name}`) : ""); }} />
           ) : activeTab === "mods" ? (
-            <LibraryCatalog lang={lang} />
+            <LibraryCatalog lang={lang} instanceId={selectedInstance?.id ?? null} instanceVersion={effectiveVersion} instanceLoader={selectedInstance?.loader ?? "fabric"} />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
           ) : activeTab === "keybinds" ? (
@@ -237,6 +260,10 @@ export default function App() {
                     <dl className="system-list">
                       <div><dt>{t.operatingSystem}</dt><dd>{system.os}</dd></div>
                       <div><dt>{t.architecture}</dt><dd>{system.arch}</dd></div>
+                      <div><dt>{lang === "ar" ? "هدف التشغيل" : "Runtime target"}</dt><dd>{system.runtime_target}</dd></div>
+                      <div><dt>{lang === "ar" ? "Java Runtime" : "Java Runtime"}</dt><dd>{system.java_detected ? (system.java_version || (lang === "ar" ? "تم العثور عليها" : "Detected")) : (lang === "ar" ? "غير مكتشفة" : "Not detected")}</dd></div>
+                      {javaCompatibility && <div className="directory-row"><dt>{lang === "ar" ? "توافق Java" : "Java compatibility"}</dt><dd>{javaCompatibility}</dd></div>}
+                      {system.java_path && <div className="directory-row"><dt>{lang === "ar" ? "مسار Java" : "Java path"}</dt><dd>{system.java_path}</dd></div>}
                       <div><dt>{t.totalMemory}</dt><dd>{Math.round(system.total_ram_mb / 1024)} GB</dd></div>
                       <div className="directory-row"><dt>{t.dataDirectory}</dt><dd>{system.launcher_dir}</dd></div>
                     </dl>

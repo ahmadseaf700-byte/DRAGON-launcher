@@ -2,6 +2,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use serde::Serialize;
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
+use sha2::Sha256;
 use std::{collections::HashMap, fs, io::{self, Read, Write}, net::{TcpStream, ToSocketAddrs}, path::{Path, PathBuf}, process::{Child, Command, Stdio}, sync::{Mutex, OnceLock}, time::{Duration, Instant}};
 use sysinfo::System;
 use tauri::{Emitter, Manager};
@@ -13,6 +14,44 @@ struct SystemEnvironment {
     arch: String,
     total_ram_mb: u64,
     launcher_dir: String,
+    runtime_target: String,
+    java_detected: bool,
+    java_version: Option<String>,
+    java_path: Option<String>,
+}
+
+#[cfg(target_os = "android")]
+fn detect_java_runtime() -> (bool, Option<String>, Option<String>) {
+    // Android's ART runtime is not a desktop JVM. A valid Minecraft runtime must
+    // be registered by the dedicated native Android engine, not inferred from PATH.
+    (false, None, None)
+}
+
+#[cfg(not(target_os = "android"))]
+fn detect_java_runtime() -> (bool, Option<String>, Option<String>) {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(home) = std::env::var_os("JAVA_HOME") {
+        let home = PathBuf::from(home);
+        candidates.push(home.join("bin").join(if cfg!(windows) { "java.exe" } else { "java" }));
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            candidates.push(directory.join(if cfg!(windows) { "java.exe" } else { "java" }));
+        }
+    }
+    for candidate in candidates {
+        if !candidate.is_file() { continue; }
+        let output = match Command::new(&candidate).arg("-version").output() {
+            Ok(output) if output.status.success() => output,
+            _ => continue,
+        };
+        let text = String::from_utf8_lossy(&output.stderr).to_string()
+            + &String::from_utf8_lossy(&output.stdout);
+        let version = text.lines().find(|line| line.contains("version"))
+            .map(|line| line.trim().trim_matches('"').to_string());
+        return (true, version, Some(candidate.to_string_lossy().into_owned()));
+    }
+    (false, None, None)
 }
 
 fn config_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -22,9 +61,20 @@ fn config_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(dir.join("config.json"))
 }
 
+#[cfg(target_os = "android")]
+static ANDROID_APP_DATA_DIR: OnceLock<PathBuf> = OnceLock::new();
+
 fn launcher_data_dir() -> Result<PathBuf, String> {
-    let base = dirs::data_dir().ok_or_else(|| "Could not resolve application data directory".to_string())?;
-    let dir = base.join("DRAGONLauncher");
+    #[cfg(target_os = "android")]
+    let dir = ANDROID_APP_DATA_DIR.get().cloned()
+        .ok_or_else(|| "Android application storage is not initialized yet".to_string())?;
+
+    #[cfg(not(target_os = "android"))]
+    let dir = {
+        let base = dirs::data_dir().ok_or_else(|| "Could not resolve application data directory".to_string())?;
+        base.join("DRAGONLauncher")
+    };
+
     fs::create_dir_all(&dir).map_err(|error| format!("Could not create launcher data directory: {error}"))?;
     Ok(dir)
 }
@@ -45,6 +95,15 @@ async fn fetch_json(client: &reqwest::Client, url: &str) -> Result<Value, String
     let response = client.get(url).send().await.map_err(|e| format!("Metadata request failed: {e}"))?;
     if !response.status().is_success() { return Err(format!("Metadata server returned HTTP {}", response.status())); }
     response.json::<Value>().await.map_err(|e| format!("Invalid Mojang JSON: {e}"))
+}
+
+#[tauri::command]
+async fn get_minecraft_version_manifest() -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("DRAGON-Launcher/0.1.0")
+        .build()
+        .map_err(|e| format!("Could not initialize Mojang connection: {e}"))?;
+    fetch_json(&client, "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json").await
 }
 
 async fn download_verified(client: &reqwest::Client, url: &str, destination: &Path, expected_sha1: Option<&str>) -> Result<u64, String> {
@@ -80,6 +139,225 @@ async fn download_verified(client: &reqwest::Client, url: &str, destination: &Pa
     Ok(bytes.len() as u64)
 }
 
+fn extract_java_archive(archive_path: &Path, destination: &Path) -> Result<(), String> {
+    const MAX_FILES: usize = 50_000;
+    const MAX_EXPANDED: u64 = 1024 * 1024 * 1024;
+    fs::create_dir_all(destination).map_err(|e| format!("Could not create Java extraction directory: {e}"))?;
+    let name = archive_path.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+    let mut count = 0usize;
+    let mut expanded = 0u64;
+    if name.ends_with(".zip") {
+        let file = fs::File::open(archive_path).map_err(|e| format!("Could not open Java ZIP: {e}"))?;
+        let mut archive = ZipArchive::new(file).map_err(|e| format!("Invalid Java ZIP archive: {e}"))?;
+        for i in 0..archive.len() {
+            count += 1;
+            if count > MAX_FILES { return Err("Java archive contains too many entries".to_string()); }
+            let mut entry = archive.by_index(i).map_err(|e| format!("Could not read Java ZIP entry: {e}"))?;
+            let raw = entry.name().replace('\\', "/");
+            let relative = safe_relative_path(&raw)?;
+            let output = destination.join(relative);
+            let mode = entry.unix_mode().unwrap_or(0);
+            if mode & 0o170000 == 0o120000 { return Err("Java archive contains a symbolic link; extraction refused".to_string()); }
+            if entry.is_dir() { fs::create_dir_all(&output).map_err(|e| format!("Could not create Java directory: {e}"))?; continue; }
+            if mode & 0o170000 != 0 && mode & 0o170000 != 0o100000 {
+                return Err("Java archive contains a special file; extraction refused".to_string());
+            }
+            expanded = expanded.checked_add(entry.size()).ok_or("Java archive size overflow")?;
+            if expanded > MAX_EXPANDED { return Err("Expanded Java runtime exceeds 1 GB safety limit".to_string()); }
+            if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|e| format!("Could not create Java directory: {e}"))?; }
+            let mut out = fs::File::create(&output).map_err(|e| format!("Could not create Java file: {e}"))?;
+            io::copy(&mut entry, &mut out).map_err(|e| format!("Could not extract Java file: {e}"))?;
+            #[cfg(unix)]
+            if mode & 0o111 != 0 {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&output, fs::Permissions::from_mode(mode & 0o777))
+                    .map_err(|e| format!("Could not set Java executable permissions: {e}"))?;
+            }
+        }
+    } else if name.ends_with(".tar.gz") || name.ends_with(".tgz") {
+        let file = fs::File::open(archive_path).map_err(|e| format!("Could not open Java TAR.GZ: {e}"))?;
+        let decoder = flate2::read::GzDecoder::new(file);
+        let mut archive = tar::Archive::new(decoder);
+        let entries = archive.entries().map_err(|e| format!("Invalid Java TAR.GZ archive: {e}"))?;
+        for item in entries {
+            count += 1;
+            if count > MAX_FILES { return Err("Java archive contains too many entries".to_string()); }
+            let mut entry = item.map_err(|e| format!("Could not read Java TAR entry: {e}"))?;
+            let entry_type = entry.header().entry_type();
+            let raw = entry.path().map_err(|e| format!("Invalid Java archive path: {e}"))?.to_string_lossy().replace('\\', "/");
+            let relative = safe_relative_path(&raw)?;
+            let output = destination.join(relative);
+            if entry_type.is_dir() { fs::create_dir_all(&output).map_err(|e| format!("Could not create Java directory: {e}"))?; continue; }
+            if !entry_type.is_file() { return Err("Java archive contains a link or special file; extraction refused".to_string()); }
+            let size = entry.header().size().map_err(|e| format!("Invalid Java entry size: {e}"))?;
+            expanded = expanded.checked_add(size).ok_or("Java archive size overflow")?;
+            if expanded > MAX_EXPANDED { return Err("Expanded Java runtime exceeds 1 GB safety limit".to_string()); }
+            if let Some(parent) = output.parent() { fs::create_dir_all(parent).map_err(|e| format!("Could not create Java directory: {e}"))?; }
+            let mut out = fs::File::create(&output).map_err(|e| format!("Could not create Java file: {e}"))?;
+            io::copy(&mut entry, &mut out).map_err(|e| format!("Could not extract Java file: {e}"))?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = entry.header().mode().unwrap_or(0) & 0o777;
+                if mode & 0o111 != 0 {
+                    fs::set_permissions(&output, fs::Permissions::from_mode(mode))
+                        .map_err(|e| format!("Could not set Java executable permissions: {e}"))?;
+                }
+            }
+        }
+    } else {
+        return Err("Unsupported Java archive format (expected ZIP or TAR.GZ)".to_string());
+    }
+    Ok(())
+}
+
+fn find_java_executable(root: &Path) -> Result<PathBuf, String> {
+    let expected = if cfg!(windows) { "java.exe" } else { "java" };
+    let mut pending = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = pending.pop() {
+        if depth > 6 { continue; }
+        let entries = fs::read_dir(&dir).map_err(|e| format!("Could not inspect extracted Java directory: {e}"))?;
+        for entry in entries {
+            let entry = entry.map_err(|e| format!("Could not inspect Java directory entry: {e}"))?;
+            let path = entry.path();
+            let kind = entry.file_type().map_err(|e| format!("Could not inspect Java file type: {e}"))?;
+            if kind.is_symlink() { continue; }
+            if kind.is_file() && path.file_name().and_then(|n| n.to_str()) == Some(expected) { return Ok(path); }
+            if kind.is_dir() { pending.push((path, depth + 1)); }
+        }
+    }
+    Err("Java executable was not found in the extracted archive".to_string())
+}
+
+#[derive(Serialize)]
+struct JavaRuntimeInstallResult {
+    archive_path: String,
+    bytes: u64,
+    sha256: String,
+    java_major: u32,
+}
+
+#[tauri::command]
+async fn download_java_runtime(
+    download_url: String,
+    checksum_sha256: String,
+    archive_size: Option<u64>,
+    java_major: u32,
+    platform: String,
+) -> Result<JavaRuntimeInstallResult, String> {
+    if !(8..=99).contains(&java_major) {
+        return Err("Invalid Java major version".to_string());
+    }
+    if checksum_sha256.len() != 64 || !checksum_sha256.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("The official package did not provide a valid SHA-256 checksum; download refused.".to_string());
+    }
+    let url = reqwest::Url::parse(&download_url).map_err(|e| format!("Invalid package URL: {e}"))?;
+    if url.scheme() != "https" || !matches!(url.host_str(), Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com") | Some("release-assets.githubusercontent.com")) {
+        return Err("Refusing a download outside approved HTTPS hosts".to_string());
+    }
+    if !matches!(platform.as_str(), "windows-x64" | "windows-aarch64" | "linux-x64" | "linux-aarch64" | "mac-x64" | "mac-aarch64") {
+        return Err("Unsupported Java runtime platform".to_string());
+    }
+    if archive_size.map(|n| n > 512 * 1024 * 1024).unwrap_or(false) {
+        return Err("Java archive exceeds the 512 MB safety limit".to_string());
+    }
+    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(5)).build()
+        .map_err(|e| format!("Could not create download client: {e}"))?;
+    let response = client.get(url.clone()).send().await.map_err(|e| format!("Java download failed: {e}"))?;
+    if !response.status().is_success() { return Err(format!("Java download returned HTTP {}", response.status())); }
+    let final_host = response.url().host_str().unwrap_or_default();
+    if !matches!(final_host, "github.com" | "githubusercontent.com" | "objects.githubusercontent.com" | "release-assets.githubusercontent.com") {
+        return Err("Download redirected outside approved HTTPS hosts".to_string());
+    }
+    if let Some(expected) = archive_size {
+        if response.content_length().map(|n| n != expected).unwrap_or(false) {
+            return Err("Downloaded archive size does not match the official manifest".to_string());
+        }
+    }
+    let bytes = response.bytes().await.map_err(|e| format!("Could not read Java archive: {e}"))?;
+    if bytes.is_empty() || bytes.len() as u64 > 512 * 1024 * 1024 {
+        return Err("Downloaded Java archive is empty or exceeds 512 MB".to_string());
+    }
+    if archive_size.map(|n| n != bytes.len() as u64).unwrap_or(false) {
+        return Err("Downloaded archive size failed verification".to_string());
+    }
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    if !digest.eq_ignore_ascii_case(&checksum_sha256) {
+        return Err("SHA-256 verification failed. The archive was not saved.".to_string());
+    }
+    let file_name = url.path_segments().and_then(|mut parts| parts.next_back())
+        .filter(|name| !name.is_empty() && name.len() < 180 && name.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)))
+        .ok_or("Unsafe Java archive filename")?;
+    let runtime_dir = launcher_data_dir()?.join("runtimes").join(format!("java-{java_major}")).join(&platform);
+    fs::create_dir_all(&runtime_dir).map_err(|e| format!("Could not create Java runtime directory: {e}"))?;
+    let destination = runtime_dir.join(file_name);
+    let temporary = runtime_dir.join(format!("{file_name}.download.tmp"));
+    fs::write(&temporary, &bytes).map_err(|e| format!("Could not save Java archive: {e}"))?;
+    if destination.exists() { fs::remove_file(&destination).map_err(|e| format!("Could not replace old archive: {e}"))?; }
+    fs::rename(&temporary, &destination).map_err(|e| format!("Could not finalize Java archive: {e}"))?;
+    Ok(JavaRuntimeInstallResult { archive_path: destination.to_string_lossy().to_string(), bytes: bytes.len() as u64, sha256: digest, java_major })
+}
+
+#[derive(Serialize)]
+struct JavaRuntimeInstallStatus {
+    java_path: String,
+    java_version: String,
+    java_major: u32,
+}
+
+#[tauri::command]
+fn install_java_runtime(
+    app: tauri::AppHandle,
+    archive_path: String,
+    java_major: u32,
+    platform: String,
+) -> Result<JavaRuntimeInstallStatus, String> {
+    if !(8..=99).contains(&java_major) { return Err("Invalid Java major version".to_string()); }
+    if !matches!(platform.as_str(), "windows-x64" | "windows-aarch64" | "linux-x64" | "linux-aarch64" | "mac-x64" | "mac-aarch64") {
+        return Err("Unsupported Java runtime platform".to_string());
+    }
+    let base = launcher_data_dir()?.join("runtimes").join(format!("java-{java_major}")).join(&platform);
+    let base_canonical = base.canonicalize().map_err(|e| format!("Java runtime directory does not exist: {e}"))?;
+    let archive = PathBuf::from(&archive_path).canonicalize().map_err(|e| format!("Downloaded Java archive not found: {e}"))?;
+    if !archive.starts_with(&base_canonical) || !archive.is_file() {
+        return Err("Archive path is outside the managed Java runtime directory".to_string());
+    }
+    let staging = base.join("install-staging");
+    if staging.exists() { fs::remove_dir_all(&staging).map_err(|e| format!("Could not clear previous staging directory: {e}"))?; }
+    extract_java_archive(&archive, &staging)?;
+    let executable = match find_java_executable(&staging) {
+        Ok(path) => path,
+        Err(error) => { let _ = fs::remove_dir_all(&staging); return Err(error); }
+    };
+    let output = match Command::new(&executable).arg("-version").output() {
+        Ok(output) => output,
+        Err(error) => { let _ = fs::remove_dir_all(&staging); return Err(format!("Extracted Java could not start: {error}")); }
+    };
+    let version_text = String::from_utf8_lossy(&output.stderr).to_string()
+        + &String::from_utf8_lossy(&output.stdout);
+    let actual_major = parse_java_major(&version_text).ok_or("Could not identify extracted Java version")?;
+    if !output.status.success() || actual_major != java_major {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(format!("Extracted Java version mismatch: expected {java_major}, got {actual_major}."));
+    }
+    let relative = executable.strip_prefix(&staging).map_err(|_| "Java executable escaped staging directory")?;
+    let installed = base.join("installed");
+    if installed.exists() { fs::remove_dir_all(&installed).map_err(|e| format!("Could not replace old Java runtime: {e}"))?; }
+    fs::rename(&staging, &installed).map_err(|e| format!("Could not finalize Java installation: {e}"))?;
+    let final_java = installed.join(relative);
+    let config_path = config_file(&app)?;
+    let mut config: Value = if config_path.exists() {
+        serde_json::from_slice(&fs::read(&config_path).map_err(|e| format!("Could not read launcher settings: {e}"))?)
+            .map_err(|e| format!("Invalid launcher settings: {e}"))?
+    } else { json!({"ram_mb":4096,"game_directory":"","java_path":"","window_width":1280,"window_height":720,"language":"ar"}) };
+    config["java_path"] = Value::String(final_java.to_string_lossy().to_string());
+    let serialized = serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?;
+    let temp_config = config_path.with_extension("json.tmp");
+    fs::write(&temp_config, serialized).map_err(|e| format!("Could not save Java setting: {e}"))?;
+    fs::rename(&temp_config, &config_path).map_err(|e| format!("Could not activate installed Java: {e}"))?;
+    Ok(JavaRuntimeInstallStatus { java_path: final_java.to_string_lossy().to_string(), java_version: version_text.trim().to_string(), java_major: actual_major })
+}
+
 fn library_allowed(library: &Value) -> bool {
     let Some(rules) = library.get("rules").and_then(Value::as_array) else { return true; };
     let os = match std::env::consts::OS { "windows" => "windows", "macos" => "osx", "linux" => "linux", _ => "unsupported" };
@@ -105,6 +383,23 @@ fn safe_relative_path(raw: &str) -> Result<PathBuf, String> {
     Ok(path.to_path_buf())
 }
 
+
+#[cfg(test)]
+mod java_archive_path_tests {
+    use super::safe_relative_path;
+
+    #[test]
+    fn accepts_normal_archive_paths() {
+        assert_eq!(safe_relative_path("jdk-21/bin/java").unwrap().to_string_lossy(), "jdk-21/bin/java");
+    }
+
+    #[test]
+    fn rejects_parent_traversal_and_absolute_paths() {
+        assert!(safe_relative_path("../outside").is_err());
+        assert!(safe_relative_path("jdk/../../outside").is_err());
+        assert!(safe_relative_path("/absolute/path").is_err());
+    }
+}
 
 fn native_classifier_key(library: &Value) -> Option<String> {
     let os = match std::env::consts::OS {
@@ -150,6 +445,218 @@ fn extract_native_archive(archive_path: &Path, destination: &Path, excludes: &[S
         }
     }
     Ok(())
+}
+
+#[derive(Serialize)]
+struct JavaCompatibility {
+    version_id: String,
+    required_major: Option<u32>,
+    detected_major: Option<u32>,
+    java_detected: bool,
+    compatible: bool,
+    java_path: Option<String>,
+    message: String,
+}
+
+fn parse_java_major(raw: &str) -> Option<u32> {
+    let start = raw.find('"').map(|i| i + 1)
+        .or_else(|| raw.find(|c: char| c.is_ascii_digit()))?;
+    let value = raw[start..].split(|c: char| !(c.is_ascii_digit() || c == '.')).next()?;
+    let mut parts = value.split('.');
+    let first = parts.next()?.parse::<u32>().ok()?;
+    if first == 1 { parts.next()?.parse::<u32>().ok() } else { Some(first) }
+}
+
+#[cfg(test)]
+mod java_version_tests {
+    use super::parse_java_major;
+
+    #[test]
+    fn parses_modern_java_version_strings() {
+        assert_eq!(parse_java_major(r#"openjdk version "21.0.5" 2024-10-15"#), Some(21));
+        assert_eq!(parse_java_major("openjdk 25.0.1 2025-10-21"), Some(25));
+    }
+
+    #[test]
+    fn parses_legacy_java_version_strings() {
+        assert_eq!(parse_java_major(r#"java version "1.8.0_402""#), Some(8));
+    }
+
+    #[test]
+    fn rejects_unparseable_java_version_strings() {
+        assert_eq!(parse_java_major("Java runtime version unknown"), None);
+    }
+}
+
+#[derive(Serialize)]
+struct JavaRuntimeDownload {
+    java_major: u32,
+    vendor: String,
+    package_name: String,
+    download_url: String,
+    checksum_sha256: Option<String>,
+    archive_size: Option<u64>,
+    platform: String,
+}
+
+#[tauri::command]
+async fn get_java_runtime_download(version_id: String) -> Result<JavaRuntimeDownload, String> {
+    if version_id.is_empty() || version_id.len() > 64
+        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err("Invalid Minecraft version identifier".to_string());
+    }
+    let metadata_path = launcher_data_dir()?.join("game").join("versions")
+        .join(&version_id).join(format!("{version_id}.json"));
+    if !metadata_path.is_file() {
+        return Err(format!("Install Minecraft {version_id} first so its Java requirement can be read."));
+    }
+    let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path)
+        .map_err(|e| format!("Could not read Minecraft metadata: {e}"))?)
+        .map_err(|e| format!("Invalid Minecraft metadata: {e}"))?;
+    let major = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64)
+        .ok_or("Minecraft metadata does not declare a Java major version")? as u32;
+    let (os, arch) = match (std::env::consts::OS, std::env::consts::ARCH) {
+        ("windows", "x86_64") => ("windows", "x64"),
+        ("windows", "aarch64") => ("windows", "aarch64"),
+        ("linux", "x86_64") => ("linux", "x64"),
+        ("linux", "aarch64") => ("linux", "aarch64"),
+        ("macos", "x86_64") => ("mac", "x64"),
+        ("macos", "aarch64") => ("mac", "aarch64"),
+        ("android", _) => return Err("Automatic Temurin installation is not enabled on Android. Android needs a separately tested Java runtime and compatibility layer.".to_string()),
+        _ => return Err(format!("No supported Temurin package mapping for {}-{}", std::env::consts::OS, std::env::consts::ARCH)),
+    };
+    let api_url = format!("https://api.adoptium.net/v3/assets/latest/{major}/hotspot");
+    let response = reqwest::Client::new().get(&api_url)
+        .query(&[("architecture", arch), ("heap_size", "normal"), ("image_type", "jre"),
+            ("jvm_impl", "hotspot"), ("os", os), ("page_size", "1"), ("vendor", "eclipse")])
+        .send().await.map_err(|e| format!("Temurin API request failed: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!("Temurin API returned HTTP {}", response.status()));
+    }
+    let assets: Value = response.json().await.map_err(|e| format!("Invalid Temurin API response: {e}"))?;
+    let asset = assets.as_array().and_then(|a| a.first()).ok_or("No matching Temurin JRE package exists for this platform and Java version")?;
+    let package = asset.pointer("/binary/package").ok_or("Temurin response has no binary package")?;
+    let download_url = package.get("link").and_then(Value::as_str).ok_or("Temurin package has no download link")?;
+    let parsed = reqwest::Url::parse(download_url).map_err(|e| format!("Invalid Temurin download URL: {e}"))?;
+    if parsed.scheme() != "https" || !matches!(parsed.host_str(), Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com")) {
+        return Err("Refusing a Temurin download URL outside the approved HTTPS hosts".to_string());
+    }
+    Ok(JavaRuntimeDownload {
+        java_major: major,
+        vendor: "Eclipse Temurin".to_string(),
+        package_name: package.get("name").and_then(Value::as_str).unwrap_or("Temurin JRE").to_string(),
+        download_url: download_url.to_string(),
+        checksum_sha256: package.get("checksum").and_then(Value::as_str).map(str::to_string),
+        archive_size: package.get("size").and_then(Value::as_u64),
+        platform: format!("{os}-{arch}"),
+    })
+}
+
+#[derive(Serialize)]
+struct JavaRuntimeCheck {
+    executable: String,
+    version: String,
+    major: Option<u32>,
+}
+
+#[tauri::command]
+fn validate_java_executable(path: String) -> Result<JavaRuntimeCheck, String> {
+    let raw = path.trim();
+    let candidate = if raw.is_empty() {
+        let (found, version, executable) = detect_java_runtime();
+        if !found {
+            return Err("لم يتم العثور على Java في JAVA_HOME أو PATH.".to_string());
+        }
+        let executable = executable.ok_or("تعذر تحديد مسار Java.")?;
+        let version = version.ok_or("تعذر قراءة إصدار Java.")?;
+        return Ok(JavaRuntimeCheck {
+            executable,
+            major: parse_java_major(&version),
+            version,
+        });
+    } else {
+        PathBuf::from(raw)
+    };
+    if !candidate.is_file() {
+        return Err(format!("ملف Java غير موجود: {}", candidate.display()));
+    }
+    let output = Command::new(&candidate).arg("-version").output()
+        .map_err(|e| format!("تعذر تشغيل Java: {e}"))?;
+    if !output.status.success() {
+        return Err(format!("Java أعادت خطأ: {}", String::from_utf8_lossy(&output.stderr)));
+    }
+    let combined = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+    let version = combined.lines().find(|line| line.contains("version") || line.contains("openjdk"))
+        .map(|line| line.trim().to_string())
+        .ok_or("تعذر قراءة رقم إصدار Java من الناتج.")?;
+    let major = parse_java_major(&version);
+    if major.is_none() {
+        return Err(format!("تم تشغيل Java لكن تعذر تحليل إصدارها: {version}"));
+    }
+    Ok(JavaRuntimeCheck {
+        executable: candidate.to_string_lossy().into_owned(),
+        version,
+        major,
+    })
+}
+
+#[tauri::command]
+fn check_java_compatibility(app: tauri::AppHandle, version_id: String) -> Result<JavaCompatibility, String> {
+    if version_id.is_empty() || version_id.len() > 64
+        || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+        return Err("Invalid Minecraft version identifier".to_string());
+    }
+    let metadata_path = launcher_data_dir()?.join("game").join("versions")
+        .join(&version_id).join(format!("{version_id}.json"));
+    if !metadata_path.is_file() {
+        return Err(format!("Minecraft metadata for {version_id} is not installed yet"));
+    }
+    let metadata: Value = serde_json::from_slice(&fs::read(&metadata_path)
+        .map_err(|e| format!("Could not read Minecraft metadata: {e}"))?)
+        .map_err(|e| format!("Invalid Minecraft metadata: {e}"))?;
+    let required_major = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64).map(|v| v as u32);
+    let config_path = config_file(&app)?;
+    let config: Value = if config_path.is_file() {
+        serde_json::from_slice(&fs::read(&config_path).map_err(|e| format!("Could not read launcher config: {e}"))?)
+            .map_err(|e| format!("Invalid launcher config: {e}"))?
+    } else { json!({}) };
+    let configured_java = config.get("java_path").and_then(Value::as_str)
+        .map(str::trim).filter(|path| !path.is_empty());
+    let (java_detected, java_version, java_path) = if let Some(path) = configured_java {
+        let candidate = PathBuf::from(path);
+        if !candidate.is_file() {
+            return Err(format!("Configured Java executable does not exist: {path}"));
+        }
+        let output = Command::new(&candidate).arg("-version").output()
+            .map_err(|e| format!("Could not run configured Java executable: {e}"))?;
+        if !output.status.success() {
+            return Err(format!("Configured Java failed: {}", String::from_utf8_lossy(&output.stderr)));
+        }
+        let text = format!("{}{}", String::from_utf8_lossy(&output.stderr), String::from_utf8_lossy(&output.stdout));
+        let version = text.lines().find(|line| line.contains("version"))
+            .map(|line| line.trim().to_string());
+        (true, version, Some(candidate.to_string_lossy().into_owned()))
+    } else {
+        detect_java_runtime()
+    };
+    let detected_major = java_version.as_deref().and_then(parse_java_major);
+    let compatible = match (required_major, detected_major) {
+        (Some(required), Some(detected)) => detected >= required,
+        (None, Some(_)) => true,
+        _ => false,
+    };
+    let message = if !java_detected {
+        "No runnable Java installation was found in JAVA_HOME or PATH".to_string()
+    } else if let (Some(required), Some(detected)) = (required_major, detected_major) {
+        if detected >= required { format!("Java {detected} satisfies the Minecraft requirement (Java {required}+)") }
+        else { format!("Java {detected} is too old; Minecraft requires Java {required}+") }
+    } else if required_major.is_none() {
+        "Java was detected; this Minecraft version does not declare a Java major requirement".to_string()
+    } else {
+        "Java was detected, but its major version could not be parsed".to_string()
+    };
+    Ok(JavaCompatibility { version_id, required_major, detected_major, java_detected, compatible,
+        java_path, message })
 }
 
 #[tauri::command]
@@ -454,14 +961,9 @@ fn launch_minecraft(
     if !java_check.status.success() {
         return Err(format!("Java لم تستجب لأمر فحص الإصدار: {}", String::from_utf8_lossy(&java_check.stderr)));
     }
-    let java_output = format!("{}{}", String::from_utf8_lossy(&java_check.stdout), String::from_utf8_lossy(&java_check.stderr));
-    let java_version_text = java_output.split('"').nth(1)
-        .ok_or_else(|| "تعذر قراءة إصدار Java المثبّت.".to_string())?;
-    let java_major = if java_version_text.starts_with("1.") {
-        java_version_text.split('.').nth(1).and_then(|v| v.parse::<u32>().ok())
-    } else {
-        java_version_text.split('.').next().and_then(|v| v.parse::<u32>().ok())
-    }.ok_or_else(|| format!("تعذر تحليل إصدار Java: {java_version_text}"))?;
+    let java_output = format!("{}{}", String::from_utf8_lossy(&java_check.stderr), String::from_utf8_lossy(&java_check.stdout));
+    let java_major = parse_java_major(&java_output)
+        .ok_or_else(|| format!("تعذر تحليل إصدار Java من الناتج: {}", java_output.trim()))?;
     if let Some(required) = metadata.pointer("/javaVersion/majorVersion").and_then(Value::as_u64) {
         if (java_major as u64) < required {
             return Err(format!("هذا الإصدار يحتاج Java {required} أو أحدث، بينما المثبّت هو Java {java_major}."));
@@ -602,7 +1104,7 @@ fn list_game_instances() -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
-fn create_game_instance(name: String, version_id: String) -> Result<Value, String> {
+fn create_game_instance(name: String, version_id: String, loader: String) -> Result<Value, String> {
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 40 || name.chars().any(|c| c.is_control()) {
         return Err("اسم النسخة يجب أن يكون بين 1 و40 حرفاً.".to_string());
@@ -610,6 +1112,9 @@ fn create_game_instance(name: String, version_id: String) -> Result<Value, Strin
     if version_id.is_empty() || version_id.len() > 64
         || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
         return Err("Invalid Minecraft version identifier".to_string());
+    }
+    if !matches!(loader.as_str(), "fabric" | "forge" | "neoforge" | "quilt") {
+        return Err("Unsupported mod loader".to_string());
     }
     let root = launcher_data_dir()?.join("instances");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
@@ -627,6 +1132,7 @@ fn create_game_instance(name: String, version_id: String) -> Result<Value, Strin
         "id": id,
         "name": name,
         "version_id": version_id,
+        "loader": loader,
         "created_at": created_at,
         "game_directory": instance_dir.to_string_lossy()
     });
@@ -705,9 +1211,12 @@ fn get_system_environment() -> Result<SystemEnvironment, String> {
     system.refresh_memory();
     let total_ram_mb = system.total_memory() / (1024 * 1024);
     let launcher_dir = launcher_data_dir()?;
+    let (java_detected, java_version, java_path) = detect_java_runtime();
+    let runtime_target = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
     Ok(SystemEnvironment { os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(), total_ram_mb,
-        launcher_dir: launcher_dir.to_string_lossy().into_owned() })
+        launcher_dir: launcher_dir.to_string_lossy().into_owned(),
+        runtime_target, java_detected, java_version, java_path })
 }
 
 #[tauri::command]
@@ -729,8 +1238,89 @@ fn save_launcher_config(app: tauri::AppHandle, config: Value) -> Result<(), Stri
     Ok(())
 }
 
+fn selected_mods_dir(app: &tauri::AppHandle, instance_id: Option<String>) -> Result<PathBuf, String> {
+    if let Some(id) = instance_id {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let dir = launcher_data_dir()?.join("instances").join(&id);
+        let metadata: Value = serde_json::from_slice(&fs::read(dir.join("instance.json"))
+            .map_err(|_| "The selected game instance does not exist".to_string())?)
+            .map_err(|e| format!("Invalid instance metadata: {e}"))?;
+        if metadata.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+            return Err("Instance identity verification failed".to_string());
+        }
+        let mods = dir.join("mods");
+        fs::create_dir_all(&mods).map_err(|e| format!("Could not create instance mods folder: {e}"))?;
+        return Ok(mods);
+    }
+    let data_dir = launcher_data_dir()?;
+    let config_path = config_file(app)?;
+    let config: Value = if config_path.exists() {
+        serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({}))
+    } else { json!({}) };
+    let game_dir = config.get("game_directory").and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
+    let mods = game_dir.join("mods");
+    fs::create_dir_all(&mods).map_err(|e| format!("Could not create mods folder: {e}"))?;
+    Ok(mods)
+}
+
 #[tauri::command]
-async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String) -> Result<String, String> {
+fn list_installed_mods(app: tauri::AppHandle, instance_id: Option<String>) -> Result<Vec<Value>, String> {
+    let root = selected_mods_dir(&app, instance_id)?;
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|e| format!("Could not read mods folder: {e}"))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let lower = name.to_ascii_lowercase();
+        let disabled = lower.ends_with(".jar.disabled");
+        if !lower.ends_with(".jar") && !disabled { continue; }
+        files.push(json!({"filename":name,"enabled":!disabled,"bytes":entry.metadata().map(|m| m.len()).unwrap_or(0)}));
+    }
+    files.sort_by(|a,b| a["filename"].as_str().cmp(&b["filename"].as_str()));
+    Ok(files)
+}
+
+#[tauri::command]
+fn set_mod_enabled(app: tauri::AppHandle, instance_id: Option<String>, filename: String, enabled: bool) -> Result<String, String> {
+    if filename.is_empty() || filename.len() > 220 || filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid mod filename".to_string());
+    }
+    let lower = filename.to_ascii_lowercase();
+    if !(lower.ends_with(".jar") || lower.ends_with(".jar.disabled")) { return Err("Only JAR mods can be toggled".to_string()); }
+    let root = selected_mods_dir(&app, instance_id)?;
+    let source = root.join(&filename);
+    if !source.is_file() { return Err("Mod file was not found".to_string()); }
+    let target_name = if enabled {
+        filename.strip_suffix(".disabled").or_else(|| filename.strip_suffix(".DISABLED"))
+            .ok_or("Mod is already enabled")?.to_string()
+    } else {
+        if lower.ends_with(".jar.disabled") { return Err("Mod is already disabled".to_string()); }
+        format!("{filename}.disabled")
+    };
+    let target = root.join(target_name);
+    if target.exists() { return Err("A file with the target name already exists".to_string()); }
+    fs::rename(&source, &target).map_err(|e| format!("Could not change mod state: {e}"))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn delete_installed_mod(app: tauri::AppHandle, instance_id: Option<String>, filename: String) -> Result<(), String> {
+    if filename.is_empty() || filename.len() > 220 || filename.contains('/') || filename.contains('\\') || filename.contains("..") {
+        return Err("Invalid mod filename".to_string());
+    }
+    let lower = filename.to_ascii_lowercase();
+    if !(lower.ends_with(".jar") || lower.ends_with(".jar.disabled")) { return Err("Only JAR mods can be deleted".to_string()); }
+    let root = selected_mods_dir(&app, instance_id)?;
+    let target = root.join(&filename);
+    if !target.is_file() { return Err("Mod file was not found".to_string()); }
+    fs::remove_file(target).map_err(|e| format!("Could not delete mod: {e}"))
+}
+
+#[tauri::command]
+async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String, instance_id: Option<String>, download_id: String) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid download URL: {e}"))?;
     if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
         return Err("Downloads are only allowed from the official Modrinth CDN over HTTPS".to_string());
@@ -753,19 +1343,19 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     if response.content_length().map(|length| length > max_bytes as u64).unwrap_or(false) {
         return Err("The selected Modrinth file exceeds the allowed download size".to_string());
     }
+    let total_bytes = response.content_length().unwrap_or(0);
     let mut bytes = Vec::new();
+    let _ = app.emit("mod-download-progress", json!({"downloadId":download_id,"received":0,"total":total_bytes}));
     while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
         if bytes.len().saturating_add(chunk.len()) > max_bytes {
             return Err("The selected Modrinth file exceeds the allowed download size".to_string());
         }
         bytes.extend_from_slice(&chunk);
+        let _ = app.emit("mod-download-progress", json!({"downloadId":download_id,"received":bytes.len(),"total":total_bytes}));
     }
     if bytes.is_empty() { return Err("The downloaded file is empty".to_string()); }
     let data_dir = launcher_data_dir()?;
-    let config_path = config_file(&app)?;
-    let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
-    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let base = if kind == "mod" { game_dir.join(folder) } else { data_dir.join(folder) };
+    let base = if kind == "mod" { selected_mods_dir(&app, instance_id)? } else { data_dir.join(folder) };
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let mut destination = base.join(&filename);
     if destination.exists() {
@@ -792,7 +1382,7 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
 
 
 #[tauri::command]
-fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String) -> Result<String, String> {
+fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String, instance_id: Option<String>) -> Result<String, String> {
     if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".jar")
         || filename.contains('/') || filename.contains('\\')
         || filename == "." || filename == ".." {
@@ -805,12 +1395,7 @@ fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: Str
     if bytes.len() < 4 || bytes.len() > 100 * 1024 * 1024 || &bytes[0..2] != b"PK" {
         return Err("The selected file is not a valid JAR/ZIP archive or exceeds 100 MB".to_string());
     }
-    let data_dir = launcher_data_dir()?;
-    let config_path = config_file(&app)?;
-    let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
-    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let mods_dir = game_dir.join("mods");
-    fs::create_dir_all(&mods_dir).map_err(|e| format!("Could not create mods folder: {e}"))?;
+    let mods_dir = selected_mods_dir(&app, instance_id)?;
     let mut destination = mods_dir.join(&filename);
     if destination.exists() {
         let stem = Path::new(&filename).file_stem().and_then(|v| v.to_str()).unwrap_or("mod");
@@ -985,7 +1570,18 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![get_system_environment, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
-            save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
+        .setup(|app| {
+            #[cfg(target_os = "android")]
+            {
+                let app_data_dir = app.path().app_data_dir()?;
+                fs::create_dir_all(&app_data_dir)?;
+                ANDROID_APP_DATA_DIR.set(app_data_dir).map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::Other, "Android app data directory was already initialized")
+                })?;
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![get_system_environment, get_minecraft_version_manifest, get_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+            save_launcher_config, download_modrinth_file, list_installed_mods, set_mod_enabled, delete_installed_mod, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
