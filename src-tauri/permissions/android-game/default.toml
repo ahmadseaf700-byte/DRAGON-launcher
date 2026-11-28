@@ -1,0 +1,8 @@
+[default]
+description = "Default access to the DRAGON Android game-surface bootstrap."
+permissions = ["allow-open-game"]
+
+[[permission]]
+identifier = "allow-open-game"
+description = "Allows opening the native Android game bootstrap activity."
+commands.allow = ["openGame"]
