@@ -267,7 +267,15 @@ export default function App() {
                       <div><dt>{t.totalMemory}</dt><dd>{Math.round(system.total_ram_mb / 1024)} GB</dd></div>
                       <div className="directory-row"><dt>{t.dataDirectory}</dt><dd>{system.launcher_dir}</dd></div>
                     </dl>
-                  ) : <div className="empty-state">{systemError ? t.unavailable : native ? t.loading : t.unavailable}</div>}
+                  ) : <div className="empty-state">
+                    {!native
+                      ? (lang === "ar"
+                        ? "أنت الآن في وضع معاينة المتصفح؛ هذا الوضع لا يستطيع قراءة مواصفات الهاتف أو الكمبيوتر. افتح تطبيق DRAGON المثبّت لعرض معلومات الجهاز الحقيقية."
+                        : "You are viewing the browser preview. It cannot read your phone or computer hardware. Open the installed DRAGON app to see real device information.")
+                      : systemError
+                        ? (lang === "ar" ? "تعذر قراءة معلومات الجهاز. أعد فتح التطبيق، وإذا استمرت المشكلة أرسل سجل الخطأ." : "Could not read device information. Reopen the app; if this continues, share the error log.")
+                        : t.loading}
+                  </div>}
                 </article>
                 <article className="panel-card memory-card">
                   <div className="panel-title"><span className="card-icon"><Cpu size={19} /></span><div><h3>{t.ram}</h3><p>{lang === "ar" ? "تخصيص الذاكرة للعبة" : "Memory reserved for Minecraft"}</p></div></div>
