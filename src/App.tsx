@@ -51,18 +51,22 @@ export default function App() {
     setRuntimeDownloadBusy(true);
     setRuntimeDownloadMessage("");
     try {
-      const metadata = await invoke<{ download_url: string; checksum_sha256: string; archive_size: number; java_major: number; platform: string }>("get_android_java_runtime_download");
-      const result = await invoke<{ archive_path: string; bytes: number; sha256: string; java_major: number }>("download_java_runtime", {
+      const metadata = await invoke<{ download_url: string; checksum_sha256: string; archive_size: number; java_major: number; platform: string; source_commit: string }>("get_android_java_runtime_download");
+      const downloaded = await invoke<{ archive_path: string; bytes: number; sha256: string; java_major: number }>("download_java_runtime", {
         downloadUrl: metadata.download_url,
         checksumSha256: metadata.checksum_sha256,
         archiveSize: metadata.archive_size,
         javaMajor: metadata.java_major,
         platform: metadata.platform
       });
-      const sizeMb = (result.bytes / 1024 / 1024).toFixed(1);
+      const installed = await invoke<{ runtime_dir: string; java_major: number; source_commit: string; files_verified: boolean }>("install_android_java21_runtime", {
+        archivePath: downloaded.archive_path,
+        sourceCommit: metadata.source_commit
+      });
+      const sizeMb = (downloaded.bytes / 1024 / 1024).toFixed(1);
       setRuntimeDownloadMessage(lang === "ar"
-        ? "تم تنزيل حزمة Java 21 والتحقق من سلامتها (" + sizeMb + " MB). لم يتم تثبيتها أو تفعيلها بعد."
-        : "Java 21 package downloaded and SHA-256 verified (" + sizeMb + " MB). It is not installed or activated yet.");
+        ? "تم تنزيل Java 21 وفك ملفات ARM64 والتحقق منها (" + sizeMb + " MB). المسار: " + installed.runtime_dir + ". ملفات Java مثبتة، لكن تشغيل JVM على Android لم يُفعّل بعد."
+        : "Java 21 downloaded, ARM64 files extracted and verified (" + sizeMb + " MB). Path: " + installed.runtime_dir + ". Runtime files are installed; Android JVM activation is still pending.");
     } catch (error) {
       setRuntimeDownloadMessage((lang === "ar" ? "فشل تنزيل Java: " : "Java download failed: ") + String(error));
     } finally {
