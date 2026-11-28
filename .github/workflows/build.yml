@@ -121,7 +121,7 @@ jobs:
       - name: Generate application icons
         run: npm run tauri -- icon src-tauri/icons/dragon.svg --output ./src-tauri/icons
 
-      - name: Run Rust unit tests
+      - name: Run Rust unit tests (including inherited metadata)
         run: cargo test --manifest-path src-tauri/Cargo.toml --lib
 
       - name: Cache Cargo dependencies and build output

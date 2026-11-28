@@ -389,9 +389,9 @@ fn minecraft_rules_allow(
     for rule in rules {
         let os_rule = rule.get("os");
         let os_matches = os_rule.and_then(|value| value.get("name"))
-            .and_then(Value::as_str).map(|expected| expected == os).unwrap_or(true);
+            .and_then(|value| value.as_str()).map(|expected| expected == os).unwrap_or(true);
         let arch_matches = os_rule.and_then(|value| value.get("arch"))
-            .and_then(Value::as_str).map(|expected| minecraft_arch_matches(expected, arch)).unwrap_or(true);
+            .and_then(|value| value.as_str()).map(|expected| minecraft_arch_matches(expected, arch)).unwrap_or(true);
         let features_match = rule.get("features").and_then(Value::as_object).map(|required| {
             required.iter().all(|(name, expected)| {
                 let expected = expected.as_bool().unwrap_or(false);
@@ -399,7 +399,7 @@ fn minecraft_rules_allow(
             })
         }).unwrap_or(true);
         if os_matches && arch_matches && features_match {
-            allowed = rule.get("action").and_then(Value::as_str) == Some("allow");
+            allowed = rule.get("action").and_then(|value| value.as_str()) == Some("allow");
         }
     }
     allowed
@@ -529,9 +529,64 @@ mod java_version_tests {
 
 #[cfg(test)]
 mod minecraft_rule_tests {
-    use super::{minecraft_arch_matches, minecraft_rules_allow};
+    use super::{merge_inherited_version_metadata, minecraft_arch_matches, minecraft_rules_allow};
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn inherited_metadata_merges_libraries_arguments_and_downloads() {
+        let parent = json!({
+            "id":"1.20.1",
+            "mainClass":"net.minecraft.client.main.Main",
+            "libraries":[
+                {"name":"org.example:base:1.0"},
+                {"name":"org.example:replace:1.0"}
+            ],
+            "arguments":{"jvm":["-Dparent=true"],"game":["--parent"]},
+            "downloads":{"client":{"url":"https://example.invalid/client.jar"}}
+        });
+        let child = json!({
+            "id":"custom-child",
+            "inheritsFrom":"1.20.1",
+            "libraries":[
+                {"name":"org.example:replace:2.0"},
+                {"name":"org.example:child:1.0"}
+            ],
+            "arguments":{"jvm":["-Dchild=true"],"game":["--child"]}
+        });
+        let merged = merge_inherited_version_metadata(&parent, &child).unwrap();
+        assert_eq!(merged["id"], "custom-child");
+        assert_eq!(merged["mainClass"], "net.minecraft.client.main.Main");
+        assert_eq!(merged["libraries"].as_array().unwrap().len(), 3);
+        assert_eq!(merged["libraries"][1]["name"], "org.example:replace:2.0");
+        assert_eq!(merged["arguments"]["jvm"], json!(["-Dparent=true","-Dchild=true"]));
+        assert_eq!(merged["arguments"]["game"], json!(["--parent","--child"]));
+        assert_eq!(merged.pointer("/downloads/client/url").and_then(|value| value.as_str()), Some("https://example.invalid/client.jar"));
+    }
+
+    #[test]
+    fn different_artifact_names_in_same_group_are_not_collapsed() {
+        let parent = json!({
+            "libraries": [{"name":"org.example:base:1.0"}]
+        });
+        let child = json!({
+            "libraries": [{"name":"org.example:base-extra:1.0"}]
+        });
+        let merged = merge_inherited_version_metadata(&parent, &child).unwrap();
+        assert_eq!(merged["libraries"].as_array().unwrap().len(), 2);
+        assert_eq!(merged["libraries"][0]["name"], "org.example:base:1.0");
+        assert_eq!(merged["libraries"][1]["name"], "org.example:base-extra:1.0");
+    }
+
+    #[test]
+    fn child_metadata_overrides_parent_scalar_fields() {
+        let parent = json!({"id":"base","type":"release","mainClass":"Parent"});
+        let child = json!({"id":"child","type":"snapshot","mainClass":"Child","inheritsFrom":"base"});
+        let merged = merge_inherited_version_metadata(&parent, &child).unwrap();
+        assert_eq!(merged["id"], "child");
+        assert_eq!(merged["type"], "snapshot");
+        assert_eq!(merged["mainClass"], "Child");
+    }
 
     #[test]
     fn entries_without_rules_are_allowed() {
@@ -622,7 +677,7 @@ async fn get_java_runtime_download(version_id: String) -> Result<JavaRuntimeDown
     let assets: Value = response.json().await.map_err(|e| format!("Invalid Temurin API response: {e}"))?;
     let asset = assets.as_array().and_then(|a| a.first()).ok_or("No matching Temurin JRE package exists for this platform and Java version")?;
     let package = asset.pointer("/binary/package").ok_or("Temurin response has no binary package")?;
-    let download_url = package.get("link").and_then(Value::as_str).ok_or("Temurin package has no download link")?;
+    let download_url = package.get("link").and_then(|value| value.as_str()).ok_or("Temurin package has no download link")?;
     let parsed = reqwest::Url::parse(download_url).map_err(|e| format!("Invalid Temurin download URL: {e}"))?;
     if parsed.scheme() != "https" || !matches!(parsed.host_str(), Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com")) {
         return Err("Refusing a Temurin download URL outside the approved HTTPS hosts".to_string());
@@ -630,9 +685,9 @@ async fn get_java_runtime_download(version_id: String) -> Result<JavaRuntimeDown
     Ok(JavaRuntimeDownload {
         java_major: major,
         vendor: "Eclipse Temurin".to_string(),
-        package_name: package.get("name").and_then(Value::as_str).unwrap_or("Temurin JRE").to_string(),
+        package_name: package.get("name").and_then(|value| value.as_str()).unwrap_or("Temurin JRE").to_string(),
         download_url: download_url.to_string(),
-        checksum_sha256: package.get("checksum").and_then(Value::as_str).map(str::to_string),
+        checksum_sha256: package.get("checksum").and_then(|value| value.as_str()).map(str::to_string),
         archive_size: package.get("size").and_then(Value::as_u64),
         platform: format!("{os}-{arch}"),
     })
@@ -706,7 +761,7 @@ fn check_java_compatibility(app: tauri::AppHandle, version_id: String) -> Result
         serde_json::from_slice(&fs::read(&config_path).map_err(|e| format!("Could not read launcher config: {e}"))?)
             .map_err(|e| format!("Invalid launcher config: {e}"))?
     } else { json!({}) };
-    let configured_java = config.get("java_path").and_then(Value::as_str)
+    let configured_java = config.get("java_path").and_then(|value| value.as_str())
         .map(str::trim).filter(|path| !path.is_empty());
     let (java_detected, java_version, java_path) = if let Some(path) = configured_java {
         let candidate = PathBuf::from(path);
@@ -769,14 +824,14 @@ fn is_minecraft_version_installed(version_id: String) -> Result<bool, String> {
     // A launcher must not mark an instance ready when its classpath is incomplete.
     if let Some(libraries) = metadata.get("libraries").and_then(Value::as_array) {
         for library in libraries.iter().filter(|item| library_allowed(item)) {
-            if let Some(path) = library.pointer("/downloads/artifact/path").and_then(Value::as_str) {
+            if let Some(path) = library.pointer("/downloads/artifact/path").and_then(|value| value.as_str()) {
                 let relative = safe_relative_path(path)?;
                 if !root.join("libraries").join(relative).is_file() {
                     return Ok(false);
                 }
             }
             if let Some(key) = native_classifier_key(library) {
-                if let Some(path) = library.pointer(&format!("/downloads/classifiers/{key}/path")).and_then(Value::as_str) {
+                if let Some(path) = library.pointer(&format!("/downloads/classifiers/{key}/path")).and_then(|value| value.as_str()) {
                     let relative = safe_relative_path(path)?;
                     if !root.join("libraries").join(relative).is_file() {
                         return Ok(false);
@@ -787,7 +842,7 @@ fn is_minecraft_version_installed(version_id: String) -> Result<bool, String> {
     }
 
     if let Some(asset_index) = metadata.get("assetIndex") {
-        let index_id = match asset_index.get("id").and_then(Value::as_str) {
+        let index_id = match asset_index.get("id").and_then(|value| value.as_str()) {
             Some(id) if !id.is_empty() && id.len() <= 80 => id,
             _ => return Ok(false),
         };
@@ -802,7 +857,7 @@ fn is_minecraft_version_installed(version_id: String) -> Result<bool, String> {
             None => return Ok(false),
         };
         for object in objects.values() {
-            let hash = match object.get("hash").and_then(Value::as_str) {
+            let hash = match object.get("hash").and_then(|value| value.as_str()) {
                 Some(hash) if hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()) => hash,
                 _ => return Ok(false),
             };
@@ -812,6 +867,98 @@ fn is_minecraft_version_installed(version_id: String) -> Result<bool, String> {
         }
     }
     Ok(true)
+}
+
+fn merge_inherited_version_metadata(parent: &Value, child: &Value) -> Result<Value, String> {
+    let mut merged = parent.as_object().cloned()
+        .ok_or_else(|| "Parent Minecraft metadata must be a JSON object".to_string())?;
+    let child_object = child.as_object()
+        .ok_or_else(|| "Child Minecraft metadata must be a JSON object".to_string())?;
+
+    for (key, child_value) in child_object {
+        match key.as_str() {
+            "libraries" => {
+                let mut libraries = parent.get("libraries").and_then(Value::as_array).cloned().unwrap_or_default();
+                let child_libraries = child_value.as_array()
+                    .ok_or_else(|| "Minecraft libraries metadata must be an array".to_string())?;
+                for library in child_libraries {
+                    let name = library.get("name").and_then(|value| value.as_str());
+                    if let Some(name) = name {
+                        let artifact_key = |coordinate: &str| {
+                            let mut parts = coordinate.split(':');
+                            match (parts.next(), parts.next()) {
+                                (Some(group), Some(artifact)) => Some(format!("{group}:{artifact}")),
+                                _ => None,
+                            }
+                        };
+                        if let Some(index) = libraries.iter().position(|existing| {
+                            existing.get("name").and_then(|value| value.as_str())
+                                .and_then(artifact_key)
+                                .as_deref() == artifact_key(name).as_deref()
+                        }) {
+                            libraries[index] = library.clone();
+                        } else {
+                            libraries.push(library.clone());
+                        }
+                    } else {
+                        libraries.push(library.clone());
+                    }
+                }
+                merged.insert(key.clone(), Value::Array(libraries));
+            }
+            "arguments" => {
+                let mut arguments = parent.get("arguments").and_then(Value::as_object).cloned().unwrap_or_default();
+                let child_arguments = child_value.as_object()
+                    .ok_or_else(|| "Minecraft arguments metadata must be an object".to_string())?;
+                for (kind, child_items) in child_arguments {
+                    let mut items = arguments.get(kind).and_then(Value::as_array).cloned().unwrap_or_default();
+                    let additions = child_items.as_array()
+                        .ok_or_else(|| format!("Minecraft {kind} arguments must be an array"))?;
+                    items.extend(additions.iter().cloned());
+                    arguments.insert(kind.clone(), Value::Array(items));
+                }
+                merged.insert(key.clone(), Value::Object(arguments));
+            }
+            "downloads" => {
+                let mut downloads = parent.get("downloads").and_then(Value::as_object).cloned().unwrap_or_default();
+                let child_downloads = child_value.as_object()
+                    .ok_or_else(|| "Minecraft downloads metadata must be an object".to_string())?;
+                for (kind, value) in child_downloads { downloads.insert(kind.clone(), value.clone()); }
+                merged.insert(key.clone(), Value::Object(downloads));
+            }
+            _ => { merged.insert(key.clone(), child_value.clone()); }
+        }
+    }
+    Ok(Value::Object(merged))
+}
+
+async fn resolve_version_metadata(
+    client: &reqwest::Client,
+    manifest: &Value,
+    version_id: &str,
+    visited: &mut std::collections::HashSet<String>,
+    depth: usize,
+) -> Result<Value, String> {
+    if depth > 16 { return Err("Minecraft version inheritance exceeds the 16-level safety limit".to_string()); }
+    if !visited.insert(version_id.to_string()) {
+        return Err(format!("Circular Minecraft version inheritance detected at {version_id}"));
+    }
+    let versions = manifest.get("versions").and_then(Value::as_array)
+        .ok_or_else(|| "Mojang version manifest has no versions list".to_string())?;
+    let entry = versions.iter().find(|v| v.get("id").and_then(|value| value.as_str()) == Some(version_id))
+        .ok_or_else(|| format!("Inherited Minecraft version {version_id} was not found in Mojang's manifest"))?;
+    let metadata_url = entry.get("url").and_then(|value| value.as_str()).ok_or("Version metadata URL is missing")?;
+    let child = fetch_json(client, metadata_url).await?;
+    if let Some(parent_id) = child.get("inheritsFrom").and_then(|value| value.as_str()) {
+        if parent_id.is_empty() || parent_id.len() > 64 ||
+            !parent_id.chars().all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)) {
+            return Err("Invalid inheritsFrom version identifier".to_string());
+        }
+        let parent = Box::pin(resolve_version_metadata(client, manifest, parent_id, visited, depth + 1)).await?;
+        merge_inherited_version_metadata(&parent, &child)
+    } else {
+        Ok(child)
+    }
 }
 
 #[derive(Serialize)]
@@ -829,12 +976,8 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
     fs::create_dir_all(&root).map_err(|e| format!("Could not create game directory: {e}"))?;
     let manifest_url = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
     let manifest = fetch_json(&client, manifest_url).await?;
-    let versions = manifest.get("versions").and_then(Value::as_array)
-        .ok_or_else(|| "Mojang version manifest has no versions list".to_string())?;
-    let entry = versions.iter().find(|v| v.get("id").and_then(Value::as_str) == Some(version_id.as_str()))
-        .ok_or_else(|| format!("Version {version_id} was not found in Mojang's manifest"))?;
-    let metadata_url = entry.get("url").and_then(Value::as_str).ok_or("Version metadata URL is missing")?;
-    let metadata = fetch_json(&client, metadata_url).await?;
+    let mut visited = std::collections::HashSet::new();
+    let metadata = resolve_version_metadata(&client, &manifest, &version_id, &mut visited, 0).await?;
     let version_dir = root.join("versions").join(&version_id);
     fs::create_dir_all(&version_dir).map_err(|e| format!("Could not create version directory: {e}"))?;
     let metadata_bytes = serde_json::to_vec_pretty(&metadata).map_err(|e| e.to_string())?;
@@ -844,8 +987,8 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
     let mut total_bytes = 0u64;
     let client_download = metadata.get("downloads").and_then(|v| v.get("client"))
         .ok_or_else(|| "This version does not provide a client download".to_string())?;
-    let client_url = client_download.get("url").and_then(Value::as_str).ok_or("Client URL is missing")?;
-    let client_sha1 = client_download.get("sha1").and_then(Value::as_str);
+    let client_url = client_download.get("url").and_then(|value| value.as_str()).ok_or("Client URL is missing")?;
+    let client_sha1 = client_download.get("sha1").and_then(|value| value.as_str());
     total_bytes += download_verified(&client, client_url, &version_dir.join(format!("{version_id}.jar")), client_sha1).await?;
     let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"client","done":1,"total":1}));
 
@@ -856,12 +999,12 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
     for library in libraries.iter().filter(|library| library_allowed(library)) {
         if let Some(classifier_key) = native_classifier_key(library) {
             if let Some(classifier) = library.pointer(&format!("/downloads/classifiers/{classifier_key}")) {
-                if let (Some(url), Some(path)) = (classifier.get("url").and_then(Value::as_str), classifier.get("path").and_then(Value::as_str)) {
+                if let (Some(url), Some(path)) = (classifier.get("url").and_then(|value| value.as_str()), classifier.get("path").and_then(|value| value.as_str())) {
                     let relative = safe_relative_path(path)?;
                     let archive_path = root.join("libraries").join(relative);
-                    let sha = classifier.get("sha1").and_then(Value::as_str);
+                    let sha = classifier.get("sha1").and_then(|value| value.as_str());
                     total_bytes += download_verified(&client, url, &archive_path, sha).await?;
-                    let excludes = library.pointer("/extract/exclude").and_then(Value::as_array).map(|items| items.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
+                    let excludes = library.pointer("/extract/exclude").and_then(Value::as_array).map(|items| items.iter().filter_map(|value| value.as_str()).map(str::to_string).collect::<Vec<_>>()).unwrap_or_default();
                     extract_native_archive(&archive_path, &natives_dir, &excludes)?;
                     installed_natives += 1;
                     let _ = app.emit("minecraft-install-progress", json!({"version":version_id,"stage":"natives","done":installed_natives,"total":libraries.len()}));
@@ -869,9 +1012,9 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
             }
         }
         if let Some(artifact) = library.pointer("/downloads/artifact") {
-            if let (Some(url), Some(path)) = (artifact.get("url").and_then(Value::as_str), artifact.get("path").and_then(Value::as_str)) {
+            if let (Some(url), Some(path)) = (artifact.get("url").and_then(|value| value.as_str()), artifact.get("path").and_then(|value| value.as_str())) {
                 let relative = safe_relative_path(path)?;
-                let sha = artifact.get("sha1").and_then(Value::as_str);
+                let sha = artifact.get("sha1").and_then(|value| value.as_str());
                 total_bytes += download_verified(&client, url, &root.join("libraries").join(relative), sha).await?;
                 installed_libraries += 1;
                 if installed_libraries % 10 == 0 {
@@ -883,16 +1026,16 @@ async fn install_minecraft_version(app: tauri::AppHandle, version_id: String) ->
 
     let mut asset_count = 0usize;
     if let Some(index) = metadata.get("assetIndex") {
-        let index_url = index.get("url").and_then(Value::as_str).ok_or("Asset index URL is missing")?;
-        let index_id = index.get("id").and_then(Value::as_str).ok_or("Asset index ID is missing")?;
-        let index_sha = index.get("sha1").and_then(Value::as_str);
+        let index_url = index.get("url").and_then(|value| value.as_str()).ok_or("Asset index URL is missing")?;
+        let index_id = index.get("id").and_then(|value| value.as_str()).ok_or("Asset index ID is missing")?;
+        let index_sha = index.get("sha1").and_then(|value| value.as_str());
         let index_path = root.join("assets").join("indexes").join(format!("{index_id}.json"));
         total_bytes += download_verified(&client, index_url, &index_path, index_sha).await?;
         let index_data: Value = serde_json::from_slice(&fs::read(&index_path).map_err(|e| e.to_string())?)
             .map_err(|e| format!("Invalid asset index: {e}"))?;
         let objects = index_data.get("objects").and_then(Value::as_object).ok_or("Asset index has no objects")?;
         for object in objects.values() {
-            let hash = object.get("hash").and_then(Value::as_str).ok_or("Asset hash is missing")?;
+            let hash = object.get("hash").and_then(|value| value.as_str()).ok_or("Asset hash is missing")?;
             if hash.len() != 40 || !hash.chars().all(|c| c.is_ascii_hexdigit()) { return Err("Invalid asset hash".to_string()); }
             let url = format!("https://resources.download.minecraft.net/{}/{}", &hash[0..2], hash);
             let destination = root.join("assets").join("objects").join(&hash[0..2]).join(hash);
@@ -939,7 +1082,7 @@ fn collect_argument_values(value: &Value, output: &mut Vec<String>, features: &H
             if let Some(value) = value.get("value") {
                 match value {
                     Value::String(text) => output.push(text.clone()),
-                    Value::Array(items) => output.extend(items.iter().filter_map(Value::as_str).map(str::to_string)),
+                    Value::Array(items) => output.extend(items.iter().filter_map(|value| value.as_str()).map(str::to_string)),
                     _ => {}
                 }
             }
@@ -1038,7 +1181,7 @@ fn launch_minecraft(
         serde_json::from_slice(&fs::read(&app_config).map_err(|e| e.to_string())?)
             .map_err(|e| format!("Invalid launcher config: {e}"))?
     } else { json!({}) };
-    let java_path = config.get("java_path").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).unwrap_or("java");
+    let java_path = config.get("java_path").and_then(|value| value.as_str()).filter(|s| !s.trim().is_empty()).unwrap_or("java");
     let java_check = Command::new(java_path).arg("-version").output()
         .map_err(|e| format!("تعذر العثور على Java ({java_path}). ثبّت Java أو حدّد مسارها من الإعدادات: {e}"))?;
     if !java_check.status.success() {
@@ -1060,15 +1203,15 @@ fn launch_minecraft(
         let metadata: Value = serde_json::from_slice(&fs::read(instance_dir.join("instance.json"))
             .map_err(|_| "النسخة المحددة لم تعد موجودة. حدّث قائمة النسخ.".to_string())?)
             .map_err(|e| format!("Invalid instance metadata: {e}"))?;
-        if metadata.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+        if metadata.get("id").and_then(|value| value.as_str()) != Some(id.as_str()) {
             return Err("Instance identity verification failed".to_string());
         }
-        if metadata.get("version_id").and_then(Value::as_str) != Some(version_id.as_str()) {
+        if metadata.get("version_id").and_then(|value| value.as_str()) != Some(version_id.as_str()) {
             return Err("إصدار النسخة المحددة لا يطابق إصدار التشغيل.".to_string());
         }
         instance_dir
     } else {
-        config.get("game_directory").and_then(Value::as_str)
+        config.get("game_directory").and_then(|value| value.as_str())
             .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| root.clone())
     };
     fs::create_dir_all(&game_dir).map_err(|e| format!("Could not create game directory: {e}"))?;
@@ -1076,7 +1219,7 @@ fn launch_minecraft(
     let mut classpath_entries: Vec<String> = Vec::new();
     if let Some(libraries) = metadata.get("libraries").and_then(Value::as_array) {
         for library in libraries.iter().filter(|item| library_allowed(item)) {
-            if let Some(path) = library.pointer("/downloads/artifact/path").and_then(Value::as_str) {
+            if let Some(path) = library.pointer("/downloads/artifact/path").and_then(|value| value.as_str()) {
                 let rel = safe_relative_path(path)?;
                 let artifact = root.join("libraries").join(rel);
                 if !artifact.is_file() {
@@ -1089,9 +1232,9 @@ fn launch_minecraft(
     classpath_entries.push(client_jar.to_string_lossy().into_owned());
     let classpath = classpath_entries.join(if cfg!(windows) { ";" } else { ":" });
     let assets_root = root.join("assets");
-    let assets_index = metadata.pointer("/assetIndex/id").and_then(Value::as_str).unwrap_or("legacy");
+    let assets_index = metadata.pointer("/assetIndex/id").and_then(|value| value.as_str()).unwrap_or("legacy");
     let natives_dir = version_dir.join("natives");
-    let version_type = metadata.get("type").and_then(Value::as_str).unwrap_or("release");
+    let version_type = metadata.get("type").and_then(|value| value.as_str()).unwrap_or("release");
 
     let mut replacements = std::collections::HashMap::<String, String>::new();
     let values = [
@@ -1140,7 +1283,7 @@ fn launch_minecraft(
     if !jvm_args.iter().any(|arg| arg.starts_with("-Xmx")) { jvm_args.push(format!("-Xmx{memory}M")); }
     if !jvm_args.iter().any(|arg| arg.starts_with("-Xms")) { jvm_args.push("-Xms512M".to_string()); }
 
-    let main_class = metadata.get("mainClass").and_then(Value::as_str)
+    let main_class = metadata.get("mainClass").and_then(|value| value.as_str())
         .ok_or_else(|| "Minecraft metadata is missing mainClass".to_string())?;
     let mut args = jvm_args;
     args.push(main_class.to_string());
@@ -1148,7 +1291,7 @@ fn launch_minecraft(
         let mut game_args = Vec::new();
         for item in items { collect_argument_values(item, &mut game_args, &features); }
         args.extend(game_args.into_iter().map(|arg| substitute(&arg)));
-    } else if let Some(old_args) = metadata.get("minecraftArguments").and_then(Value::as_str) {
+    } else if let Some(old_args) = metadata.get("minecraftArguments").and_then(|value| value.as_str()) {
         args.extend(old_args.split_whitespace().map(substitute));
     }
 
@@ -1239,7 +1382,7 @@ fn delete_game_instance(instance_id: String) -> Result<(), String> {
     let metadata: Value = serde_json::from_slice(&fs::read(target.join("instance.json"))
         .map_err(|e| format!("Cannot verify instance metadata: {e}"))?)
         .map_err(|e| format!("Invalid instance metadata: {e}"))?;
-    if metadata.get("id").and_then(Value::as_str) != Some(instance_id.as_str()) {
+    if metadata.get("id").and_then(|value| value.as_str()) != Some(instance_id.as_str()) {
         return Err("Instance identity verification failed".to_string());
     }
     fs::remove_dir_all(target).map_err(|e| format!("Could not delete instance: {e}"))
@@ -1258,7 +1401,7 @@ fn rename_game_instance(instance_id: String, name: String) -> Result<Value, Stri
     if !target.join("instance.json").is_file() { return Err("النسخة المطلوبة غير موجودة.".to_string()); }
     let mut value: Value = serde_json::from_slice(&fs::read(target.join("instance.json")).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
-    if value.get("id").and_then(Value::as_str) != Some(instance_id.as_str()) {
+    if value.get("id").and_then(|value| value.as_str()) != Some(instance_id.as_str()) {
         return Err("Instance identity verification failed".to_string());
     }
     value["name"] = Value::String(name.to_string());
@@ -1331,7 +1474,7 @@ fn selected_mods_dir(app: &tauri::AppHandle, instance_id: Option<String>) -> Res
         let metadata: Value = serde_json::from_slice(&fs::read(dir.join("instance.json"))
             .map_err(|_| "The selected game instance does not exist".to_string())?)
             .map_err(|e| format!("Invalid instance metadata: {e}"))?;
-        if metadata.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+        if metadata.get("id").and_then(|value| value.as_str()) != Some(id.as_str()) {
             return Err("Instance identity verification failed".to_string());
         }
         let mods = dir.join("mods");
@@ -1343,7 +1486,7 @@ fn selected_mods_dir(app: &tauri::AppHandle, instance_id: Option<String>) -> Res
     let config: Value = if config_path.exists() {
         serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({}))
     } else { json!({}) };
-    let game_dir = config.get("game_directory").and_then(Value::as_str)
+    let game_dir = config.get("game_directory").and_then(|value| value.as_str())
         .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
     let mods = game_dir.join("mods");
     fs::create_dir_all(&mods).map_err(|e| format!("Could not create mods folder: {e}"))?;
@@ -1500,7 +1643,7 @@ fn read_game_log(app: tauri::AppHandle) -> Result<String, String> {
     let root = launcher_data_dir()?.join("game");
     let config_path = config_file(&app)?;
     let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
-    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or(root);
+    let game_dir = config.get("game_directory").and_then(|value| value.as_str()).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or(root);
     let mut combined = String::new();
     for (label, path) in [
         ("Minecraft latest.log", game_dir.join("logs").join("latest.log")),
@@ -1577,7 +1720,7 @@ fn component_text(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(items) => items.iter().map(component_text).collect::<Vec<_>>().join(""),
         Value::Object(map) => {
-            let mut text = map.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            let mut text = map.get("text").and_then(|value| value.as_str()).unwrap_or("").to_string();
             if let Some(extra) = map.get("extra") { text.push_str(&component_text(extra)); }
             text
         }
@@ -1642,9 +1785,9 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
             online: true, host, port, latency_ms: Some(latency),
             players_online: players.and_then(|p| p.get("online")).and_then(Value::as_u64).map(|v| v as u32),
             players_max: players.and_then(|p| p.get("max")).and_then(Value::as_u64).map(|v| v as u32),
-            version: status.pointer("/version/name").and_then(Value::as_str).map(str::to_string),
+            version: status.pointer("/version/name").and_then(|value| value.as_str()).map(str::to_string),
             motd: description,
-            favicon: status.get("favicon").and_then(Value::as_str).map(str::to_string),
+            favicon: status.get("favicon").and_then(|value| value.as_str()).map(str::to_string),
             error: None,
         });
     }
