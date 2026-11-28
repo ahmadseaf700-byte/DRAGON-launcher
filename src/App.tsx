@@ -37,12 +37,43 @@ export default function App() {
   const [launchError, setLaunchError] = useState("");
   const [versionInstalled, setVersionInstalled] = useState(false);
   const [javaCompatibility, setJavaCompatibility] = useState<string>("");
+  const [runtimeDownloadBusy, setRuntimeDownloadBusy] = useState(false);
+  const [runtimeDownloadMessage, setRuntimeDownloadMessage] = useState("");
   const [checkingVersion, setCheckingVersion] = useState(false);
   const [activeGamePid, setActiveGamePid] = useState<number | null>(null);
   const [selectedInstance, setSelectedInstance] = useState<GameInstance | null>(() => { try { const raw = localStorage.getItem("dragon.activeInstance"); return raw ? JSON.parse(raw) as GameInstance : null; } catch { return null; } });
   const effectiveVersion = selectedInstance?.version_id || selectedVersion;
   const [stoppingGame, setStoppingGame] = useState(false);
   const native = isTauri();
+
+  const downloadAndroidJava21 = async () => {
+    if (!native || runtimeDownloadBusy) return;
+    setRuntimeDownloadBusy(true);
+    setRuntimeDownloadMessage("");
+    try {
+      const metadata = await invoke<{ download_url: string; checksum_sha256: string; archive_size: number; java_major: number; platform: string; source_commit: string }>("get_android_java_runtime_download");
+      const downloaded = await invoke<{ archive_path: string; bytes: number; sha256: string; java_major: number }>("download_java_runtime", {
+        downloadUrl: metadata.download_url,
+        checksumSha256: metadata.checksum_sha256,
+        archiveSize: metadata.archive_size,
+        javaMajor: metadata.java_major,
+        platform: metadata.platform
+      });
+      const installed = await invoke<{ runtime_dir: string; java_major: number; source_commit: string; files_verified: boolean }>("install_android_java21_runtime", {
+        archivePath: downloaded.archive_path,
+        sourceCommit: metadata.source_commit
+      });
+      localStorage.setItem("dragon.androidJavaRuntimeDir", installed.runtime_dir);
+      const sizeMb = (downloaded.bytes / 1024 / 1024).toFixed(1);
+      setRuntimeDownloadMessage(lang === "ar"
+        ? "تم تنزيل Java 21 وفك ملفات ARM64 والتحقق منها (" + sizeMb + " MB). المسار: " + installed.runtime_dir + ". ملفات Java مثبتة، لكن تشغيل JVM على Android لم يُفعّل بعد."
+        : "Java 21 downloaded, ARM64 files extracted and verified (" + sizeMb + " MB). Path: " + installed.runtime_dir + ". Runtime files are installed; Android JVM activation is still pending.");
+    } catch (error) {
+      setRuntimeDownloadMessage((lang === "ar" ? "فشل تنزيل Java: " : "Java download failed: ") + String(error));
+    } finally {
+      setRuntimeDownloadBusy(false);
+    }
+  };
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -144,12 +175,31 @@ export default function App() {
   const handlePlay = async () => {
     setLaunchError(""); setLaunchMessage("");
     if (!native) { setLaunchError(lang === "ar" ? "شغّل نسخة التطبيق المثبتة لتشغيل Minecraft." : "Run the installed desktop app to launch Minecraft."); return; }
-    // The current Android APK is a Tauri shell only. Never proceed through the desktop
-    // Java/process path until a real Android JVM + game-window/input engine is integrated.
+    if (!effectiveVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
+    if (!versionInstalled) { setLaunchError(lang === "ar" ? "هذا الإصدار غير مثبت. نزّله أولاً من صفحة الإصدارات." : "Install this version first from Versions."); setActiveTab("versions"); return; }
     if (system?.os === "android") {
-      setLaunchError(lang === "ar"
-        ? "تشغيل Minecraft Java على Android غير متاح في هذا الإصدار بعد. ما زلنا نحتاج دمج محرك Android متكامل (JVM + LWJGL/GLFW + Renderer + شاشة وتحكم اللمس). لن يبدأ التنزيل أو التشغيل الوهمي."
-        : "Minecraft Java is not launchable on Android in this build yet. A complete Android engine (JVM + LWJGL/GLFW + renderer + game surface/touch input) still needs to be integrated. No fake launch or runtime download will be attempted.");
+      const runtimeDir = localStorage.getItem("dragon.androidJavaRuntimeDir") || "";
+      if (!runtimeDir) {
+        setLaunchError(lang === "ar"
+          ? "نزّل ملفات Java 21 ARM64 أولاً من بطاقة معلومات النظام. لم يتم تشغيل أي شيء."
+          : "Download the Java 21 ARM64 runtime files from the System card first. Nothing was launched.");
+        return;
+      }
+      setLaunching(true);
+      try {
+        await invoke("plugin:android-game|openGame", {
+          runtimeDir,
+          versionId: effectiveVersion,
+          ramMb: ramMB
+        });
+        setLaunchMessage(lang === "ar"
+          ? "فُتحت شاشة Android التمهيدية. هذه تختبر سطح OpenGL وأزرار اللمس وفحص JVM فقط؛ Minecraft نفسها لم تبدأ بعد لأن ربط JLI/LWJGL/GL4ES لم يكتمل."
+          : "Android bootstrap surface opened. This tests the OpenGL surface, touch queue and JVM probe only; Minecraft has not started because JLI/LWJGL/GL4ES integration is not complete.");
+      } catch (error) {
+        setLaunchError((lang === "ar" ? "تعذر فتح شاشة Android: " : "Could not open Android game surface: ") + String(error));
+      } finally {
+        setLaunching(false);
+      }
       return;
     }
     if (!effectiveVersion) { setLaunchError(lang === "ar" ? "اختر إصدار Minecraft أولاً." : "Select a Minecraft version first."); setActiveTab("versions"); return; }
@@ -257,6 +307,7 @@ export default function App() {
                 <article className="panel-card">
                   <div className="panel-title"><span className="card-icon"><Cpu size={19} /></span><div><h3>{t.system}</h3><p>{lang === "ar" ? "ملخص بيئة التشغيل الحالية" : "Current runtime environment"}</p></div></div>
                   {system ? (
+                    <>
                     <dl className="system-list">
                       <div><dt>{t.operatingSystem}</dt><dd>{system.os}</dd></div>
                       <div><dt>{t.architecture}</dt><dd>{system.arch}</dd></div>
@@ -267,6 +318,17 @@ export default function App() {
                       <div><dt>{t.totalMemory}</dt><dd>{Math.round(system.total_ram_mb / 1024)} GB</dd></div>
                       <div className="directory-row"><dt>{t.dataDirectory}</dt><dd>{system.launcher_dir}</dd></div>
                     </dl>
+                    {system.os.toLowerCase() === "android" && (
+                      <div className="runtime-download-actions">
+                        <button className="text-action" onClick={() => void downloadAndroidJava21()} disabled={runtimeDownloadBusy}>
+                          <Download size={15} /> {runtimeDownloadBusy
+                            ? (lang === "ar" ? "جارٍ تنزيل Java 21..." : "Downloading Java 21...")
+                            : (lang === "ar" ? "تنزيل Java 21 لأندرويد ARM64" : "Download Java 21 for Android ARM64")}
+                        </button>
+                        {runtimeDownloadMessage && <p className="memory-note" role="status">{runtimeDownloadMessage}</p>}
+                      </div>
+                    )}
+                    </>
                   ) : <div className="empty-state">{systemError ? t.unavailable : native ? t.loading : t.unavailable}</div>}
                 </article>
                 <article className="panel-card memory-card">
