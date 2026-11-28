@@ -23,7 +23,7 @@ const CATEGORIES = [
 ];
 
 export default function ModrinthCatalog({ lang, kind, instanceId, initialVersion, initialLoader }: {
-  lang: Language; kind: "mod" | "modpack"; instanceId?: string | null; initialVersion?: string; initialLoader?: string;
+  lang: Language; kind: "mod" | "modpack"; instanceId?: string | null; initialVersion?: string | null; initialLoader?: string;
 }) {
   const ar = lang === "ar";
   const native = isTauri();
