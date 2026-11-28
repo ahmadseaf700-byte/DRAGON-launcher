@@ -237,6 +237,102 @@ struct JavaRuntimeInstallResult {
     java_major: u32,
 }
 
+#[derive(Serialize)]
+struct AndroidJavaRuntimeDownload {
+    download_url: String,
+    checksum_sha256: String,
+    archive_size: u64,
+    java_major: u32,
+    platform: String,
+    source_commit: String,
+    workflow_run_id: u64,
+}
+
+/// Resolve the newest successful Java 21 ARM64 Android runtime artifact.
+/// The artifact digest comes from GitHub's Actions artifact metadata; no checksum is guessed.
+#[tauri::command]
+async fn get_android_java_runtime_download() -> Result<AndroidJavaRuntimeDownload, String> {
+    const SOURCE_REPO: &str = "PojavLauncherTeam/android-openjdk-build-multiarch";
+    const SOURCE_BRANCH: &str = "buildjre17-21";
+    const ARTIFACT_NAME: &str = "jre21-pojav";
+    let client = reqwest::Client::builder()
+        .user_agent("DRAGON-Launcher/0.1.0")
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .map_err(|e| format!("Could not initialize GitHub client: {e}"))?;
+
+    let runs_url = format!(
+        "https://api.github.com/repos/{SOURCE_REPO}/actions/workflows/build.yml/runs?branch={SOURCE_BRANCH}&status=success&per_page=20"
+    );
+    let runs_response = client.get(&runs_url)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send().await.map_err(|e| format!("Could not query Java runtime builds: {e}"))?;
+    if !runs_response.status().is_success() {
+        return Err(format!("GitHub workflow query returned HTTP {}", runs_response.status()));
+    }
+    let runs: Value = runs_response.json().await
+        .map_err(|e| format!("GitHub returned invalid workflow metadata: {e}"))?;
+    let run = runs.get("workflow_runs").and_then(Value::as_array)
+        .and_then(|items| items.iter().find(|item| {
+            item.get("conclusion").and_then(Value::as_str) == Some("success")
+                && item.get("head_branch").and_then(Value::as_str) == Some(SOURCE_BRANCH)
+        }))
+        .ok_or("No successful Java 21 Android runtime build was found")?;
+    let run_id = run.get("id").and_then(Value::as_u64)
+        .ok_or("GitHub workflow run has no valid ID")?;
+    let source_commit = run.get("head_sha").and_then(Value::as_str)
+        .filter(|sha| sha.len() == 40 && sha.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or("GitHub workflow run has no valid source commit")?.to_string();
+
+    let artifacts_url = format!(
+        "https://api.github.com/repos/{SOURCE_REPO}/actions/runs/{run_id}/artifacts?per_page=100"
+    );
+    let artifacts_response = client.get(&artifacts_url)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .send().await.map_err(|e| format!("Could not query Java runtime artifact: {e}"))?;
+    if !artifacts_response.status().is_success() {
+        return Err(format!("GitHub artifact query returned HTTP {}", artifacts_response.status()));
+    }
+    let artifacts: Value = artifacts_response.json().await
+        .map_err(|e| format!("GitHub returned invalid artifact metadata: {e}"))?;
+    let artifact = artifacts.get("artifacts").and_then(Value::as_array)
+        .and_then(|items| items.iter().find(|item| {
+            item.get("name").and_then(Value::as_str) == Some(ARTIFACT_NAME)
+                && item.get("expired").and_then(Value::as_bool) == Some(false)
+        }))
+        .ok_or("The successful build does not contain an available jre21-pojav artifact")?;
+
+    let artifact_id = artifact.get("id").and_then(Value::as_u64)
+        .ok_or("Java runtime artifact has no valid ID")?;
+    let archive_size = artifact.get("size_in_bytes").and_then(Value::as_u64)
+        .filter(|size| *size > 0 && *size <= 512 * 1024 * 1024)
+        .ok_or("Java runtime artifact size is missing or exceeds 512 MB")?;
+    let digest = artifact.get("digest").and_then(Value::as_str)
+        .and_then(|value| value.strip_prefix("sha256:"))
+        .filter(|value| value.len() == 64 && value.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or("GitHub did not provide a valid SHA-256 digest for the Java artifact")?
+        .to_string();
+    let download_url = artifact.get("archive_download_url").and_then(Value::as_str)
+        .filter(|url| url.starts_with("https://api.github.com/repos/PojavLauncherTeam/android-openjdk-build-multiarch/actions/artifacts/"))
+        .ok_or("GitHub returned an unexpected Java artifact download URL")?
+        .to_string();
+
+    // Ensure the artifact belongs to the same workflow run we selected.
+    if artifact.get("workflow_run").and_then(|v| v.get("id")).and_then(Value::as_u64) != Some(run_id) {
+        return Err("Java artifact does not belong to the selected successful workflow run".to_string());
+    }
+    let _ = artifact_id; // Kept explicit for traceability in the validated artifact metadata.
+    Ok(AndroidJavaRuntimeDownload {
+        download_url,
+        checksum_sha256: digest,
+        archive_size,
+        java_major: 21,
+        platform: "android-aarch64".to_string(),
+        source_commit,
+        workflow_run_id: run_id,
+    })
+}
+
 #[tauri::command]
 async fn download_java_runtime(
     download_url: String,
@@ -252,10 +348,10 @@ async fn download_java_runtime(
         return Err("The official package did not provide a valid SHA-256 checksum; download refused.".to_string());
     }
     let url = reqwest::Url::parse(&download_url).map_err(|e| format!("Invalid package URL: {e}"))?;
-    if url.scheme() != "https" || !matches!(url.host_str(), Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com") | Some("release-assets.githubusercontent.com")) {
+    if url.scheme() != "https" || !matches!(url.host_str(), Some("api.github.com") | Some("github.com") | Some("githubusercontent.com") | Some("objects.githubusercontent.com") | Some("release-assets.githubusercontent.com")) {
         return Err("Refusing a download outside approved HTTPS hosts".to_string());
     }
-    if !matches!(platform.as_str(), "windows-x64" | "windows-aarch64" | "linux-x64" | "linux-aarch64" | "mac-x64" | "mac-aarch64") {
+    if !matches!(platform.as_str(), "windows-x64" | "windows-aarch64" | "linux-x64" | "linux-aarch64" | "mac-x64" | "mac-aarch64" | "android-aarch64") {
         return Err("Unsupported Java runtime platform".to_string());
     }
     if archive_size.map(|n| n > 512 * 1024 * 1024).unwrap_or(false) {
@@ -266,7 +362,7 @@ async fn download_java_runtime(
     let response = client.get(url.clone()).send().await.map_err(|e| format!("Java download failed: {e}"))?;
     if !response.status().is_success() { return Err(format!("Java download returned HTTP {}", response.status())); }
     let final_host = response.url().host_str().unwrap_or_default();
-    if !matches!(final_host, "github.com" | "githubusercontent.com" | "objects.githubusercontent.com" | "release-assets.githubusercontent.com") {
+    if !matches!(final_host, "api.github.com" | "github.com" | "githubusercontent.com" | "objects.githubusercontent.com" | "release-assets.githubusercontent.com") {
         return Err("Download redirected outside approved HTTPS hosts".to_string());
     }
     if let Some(expected) = archive_size {
@@ -290,7 +386,7 @@ async fn download_java_runtime(
         .ok_or("Unsafe Java archive filename")?;
     let runtime_dir = launcher_data_dir()?.join("runtimes").join(format!("java-{java_major}")).join(&platform);
     fs::create_dir_all(&runtime_dir).map_err(|e| format!("Could not create Java runtime directory: {e}"))?;
-    let destination = runtime_dir.join(file_name);
+    let destination = runtime_dir.join(&file_name);
     let temporary = runtime_dir.join(format!("{file_name}.download.tmp"));
     fs::write(&temporary, &bytes).map_err(|e| format!("Could not save Java archive: {e}"))?;
     if destination.exists() { fs::remove_file(&destination).map_err(|e| format!("Could not replace old archive: {e}"))?; }
@@ -1665,7 +1761,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_system_environment, get_minecraft_version_manifest, get_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, get_minecraft_version_manifest, get_java_runtime_download, get_android_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, list_installed_mods, set_mod_enabled, delete_installed_mod, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
