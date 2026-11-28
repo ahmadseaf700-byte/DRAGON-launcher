@@ -12,7 +12,9 @@
 }
 * { box-sizing: border-box; }
 html, body, #root { width: 100%; min-width: 320px; min-height: 100%; margin: 0; }
-body { background: #090b12; }
+body { min-height: 100vh; overflow-x: hidden; background: #090b12; }
+#root { min-height: 100vh; }
+.launcher-shell, .main-area, .page-content, .feature-page { min-width: 0; }
 button, input, select { font: inherit; }
 button { -webkit-tap-highlight-color: transparent; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid #fb7185; outline-offset: 3px; }
@@ -150,7 +152,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .info-card, .panel-card { padding: 18px; border-radius: 15px; }
   .card-main-value { font-size: 22px; }
   .system-list { gap: 15px 12px; }
-  .play-dock { gap: 10px; margin-top: 18px; padding: 12px; }
+  .play-dock { min-width: 0; gap: 10px; margin-top: 18px; padding: 12px; }
+  .dock-copy { min-width: 0; }
+  .play-button { flex: 0 0 auto; }
   .dock-game-icon { width: 37px; height: 37px; }
   .dock-copy strong { font-size: 10px; }
   .dock-copy span { max-width: 175px; font-size: 9px; }
@@ -161,8 +165,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   .nav-item { padding-inline: 9px; }
   .nav-item span { font-size: 10px; }
   .welcome-content h3 { font-size: 30px; }
-  .play-button { font-size: 0; }
-  .play-button svg { width: 19px; height: 19px; }
+  .play-dock { gap: 8px; }
+  .dock-game-icon { display: none; }
+  .dock-copy span { max-width: 125px; }
+  .play-button { min-width: 72px; padding-inline: 9px; font-size: 9px; }
+  .play-button svg { width: 15px; height: 15px; }
 }
 
 /* Functional feature panels */

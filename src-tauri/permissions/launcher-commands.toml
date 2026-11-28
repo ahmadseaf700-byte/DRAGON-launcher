@@ -1,0 +1,33 @@
+"$schema" = "../gen/schemas/desktop-schema.json"
+
+[[permission]]
+identifier = "allow-launcher-commands"
+description = "Allows the main DRAGON window to invoke the launcher's explicitly registered application commands."
+commands.allow = [
+  "get_system_environment",
+  "get_minecraft_version_manifest",
+  "get_java_runtime_download",
+  "download_java_runtime",
+  "install_java_runtime",
+  "validate_java_executable",
+  "check_java_compatibility",
+  "list_game_instances",
+  "create_game_instance",
+  "delete_game_instance",
+  "rename_game_instance",
+  "open_instance_folder",
+  "load_launcher_config",
+  "save_launcher_config",
+  "download_modrinth_file",
+  "list_installed_mods",
+  "set_mod_enabled",
+  "delete_installed_mod",
+  "is_minecraft_version_installed",
+  "install_minecraft_version",
+  "import_external_mod",
+  "read_game_log",
+  "launch_minecraft",
+  "get_game_process_status",
+  "stop_game_process",
+  "ping_minecraft_server"
+]
