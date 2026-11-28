@@ -1907,7 +1907,7 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 pub fn run() {
     tauri::Builder::default()
         .plugin(
-            tauri::plugin::Builder::new("android-game")
+            tauri::plugin::Builder::<tauri::Wry, ()>::new("android-game")
                 .setup(|_app, api| {
                     #[cfg(target_os = "android")]
                     {
