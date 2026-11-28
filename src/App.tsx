@@ -25,6 +25,8 @@ interface SystemEnv {
   java_detected: boolean;
   java_version: string | null;
   java_path: string | null;
+  java_runtime_installed: boolean;
+  java_runtime_dir: string | null;
 }
 
 export default function App() {
@@ -64,10 +66,12 @@ export default function App() {
         sourceCommit: metadata.source_commit
       });
       localStorage.setItem("dragon.androidJavaRuntimeDir", installed.runtime_dir);
+      const refreshedSystem = await invoke<SystemEnv>("get_system_environment");
+      setSystem(refreshedSystem);
       const sizeMb = (downloaded.bytes / 1024 / 1024).toFixed(1);
       setRuntimeDownloadMessage(lang === "ar"
-        ? "تم تنزيل Java 21 وفك ملفات ARM64 والتحقق منها (" + sizeMb + " MB). المسار: " + installed.runtime_dir + ". ملفات Java مثبتة، لكن تشغيل JVM على Android لم يُفعّل بعد."
-        : "Java 21 downloaded, ARM64 files extracted and verified (" + sizeMb + " MB). Path: " + installed.runtime_dir + ". Runtime files are installed; Android JVM activation is still pending.");
+        ? "تم تثبيت ملفات Java 21 ARM64 والتحقق منها (" + sizeMb + " MB). أصبحت ظاهرة في حالة النظام. تشغيل JVM واللعبة ما زال يحتاج دمج محرك Android."
+        : "Java 21 ARM64 files downloaded, extracted and verified (" + sizeMb + " MB). System status refreshed. JVM and Minecraft launch still require the Android engine integration.");
     } catch (error) {
       setRuntimeDownloadMessage((lang === "ar" ? "فشل تنزيل Java: " : "Java download failed: ") + String(error));
     } finally {
@@ -312,9 +316,9 @@ export default function App() {
                       <div><dt>{t.operatingSystem}</dt><dd>{system.os}</dd></div>
                       <div><dt>{t.architecture}</dt><dd>{system.arch}</dd></div>
                       <div><dt>{lang === "ar" ? "هدف التشغيل" : "Runtime target"}</dt><dd>{system.runtime_target}</dd></div>
-                      <div><dt>{lang === "ar" ? "Java Runtime" : "Java Runtime"}</dt><dd>{system.java_detected ? (system.java_version || (lang === "ar" ? "تم العثور عليها" : "Detected")) : (lang === "ar" ? "غير مكتشفة" : "Not detected")}</dd></div>
+                      <div><dt>Java Runtime</dt><dd>{system.os === "android" ? (system.java_runtime_installed ? (lang === "ar" ? "Java 21 مثبتة · JVM غير مفعّلة" : "Java 21 files installed · JVM not activated") : (lang === "ar" ? "غير مثبتة" : "Not installed")) : (system.java_detected ? (system.java_version || (lang === "ar" ? "تم العثور عليها" : "Detected")) : (lang === "ar" ? "غير مكتشفة" : "Not detected"))}</dd></div>
                       {javaCompatibility && <div className="directory-row"><dt>{lang === "ar" ? "توافق Java" : "Java compatibility"}</dt><dd>{javaCompatibility}</dd></div>}
-                      {system.java_path && <div className="directory-row"><dt>{lang === "ar" ? "مسار Java" : "Java path"}</dt><dd>{system.java_path}</dd></div>}
+                      {(system.java_path || system.java_runtime_dir) && <div className="directory-row"><dt>{lang === "ar" ? "مسار Java" : "Java path"}</dt><dd>{system.java_path || system.java_runtime_dir}</dd></div>}
                       <div><dt>{t.totalMemory}</dt><dd>{Math.round(system.total_ram_mb / 1024)} GB</dd></div>
                       <div className="directory-row"><dt>{t.dataDirectory}</dt><dd>{system.launcher_dir}</dd></div>
                     </dl>
