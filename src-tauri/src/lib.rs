@@ -1880,6 +1880,24 @@ fn ping_minecraft_server(host: String, port: u16) -> Result<ServerPingResult, St
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            tauri::plugin::Builder::new("android-game")
+                .setup(|_app, api| {
+                    #[cfg(target_os = "android")]
+                    {
+                        api.register_android_plugin(
+                            "com.dragonlauncher.desktop",
+                            "DragonGamePlugin",
+                        )?;
+                    }
+                    #[cfg(not(target_os = "android"))]
+                    {
+                        let _ = api;
+                    }
+                    Ok(())
+                })
+                .build(),
+        )
         .setup(|app| {
             #[cfg(target_os = "android")]
             {
