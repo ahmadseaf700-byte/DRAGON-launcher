@@ -14,7 +14,7 @@ import KeybindsPanel from "./components/KeybindsPanel";
 import ServersPanel from "./components/ServersPanel";
 import InstancesPanel from "./components/InstancesPanel";
 
-interface GameInstance { id: string; name: string; version_id: string; created_at: number; game_directory: string; }
+interface GameInstance { id: string; name: string; version_id: string; created_at: number; game_directory: string; loader?: string; }
 
 interface SystemEnv {
   os: string;
@@ -207,7 +207,7 @@ export default function App() {
            ) : activeTab === "instances" ? (
             <InstancesPanel lang={lang} selectedId={selectedInstance?.id ?? null} onSelect={(item) => { setSelectedInstance(item); if (item) localStorage.setItem("dragon.activeInstance", JSON.stringify(item)); else localStorage.removeItem("dragon.activeInstance"); setLaunchMessage(item ? (lang === "ar" ? `النسخة المحددة: ${item.name}` : `Selected instance: ${item.name}`) : ""); }} />
           ) : activeTab === "mods" ? (
-            <LibraryCatalog lang={lang} />
+            <LibraryCatalog lang={lang} instanceId={selectedInstance?.id ?? null} instanceVersion={effectiveVersion} instanceLoader={selectedInstance?.loader ?? "fabric"} />
           ) : activeTab === "accounts" ? (
             <AccountsPanel lang={lang} />
           ) : activeTab === "keybinds" ? (
