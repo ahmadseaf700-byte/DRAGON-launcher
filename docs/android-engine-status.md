@@ -23,3 +23,16 @@ The surface currently clears to a diagnostic background. The touch queue is not 
 5. Test on physical ARM64 Android hardware, including pause/resume, touch input, memory limits, and crash recovery.
 
 PojavLauncher is a reference implementation, not a drop-in library. Its upstream licensing and notices must be preserved if code is ever incorporated.
+
+## Latest implementation step: JVM smoke-test attempt
+
+The diagnostic-only `JNI_CreateJavaVM` symbol probe has been replaced with an actual, asynchronous JVM startup attempt:
+
+- Loads the Android JRE's `libjli.so` and available core runtime libraries from the extracted Java 21 directory.
+- Loads `lib/server/libjvm.so`, resolves `JNI_CreateJavaVM`, and requests a HotSpot VM in the app process.
+- Calls `java.lang.System.getProperty("java.version")` through the created VM and reports the returned version in the activity.
+- Runs off the Android UI thread and reports linker/JVM startup errors rather than claiming success.
+
+**Important:** this is an implementation attempt, not proof that the runtime starts on a real device. Android linker namespaces, the exact JRE artifact layout, and runtime-specific bootstrap requirements may still prevent VM startup. GitHub Actions can verify compilation and APK packaging, but cannot prove that HotSpot successfully starts on physical hardware.
+
+The Android Activity still displays a diagnostic GLES surface. Minecraft is not playable yet: LWJGL/GLFW, a real renderer backend, game launch arguments/classpath, and live touch-to-GLFW input remain unintegrated.
