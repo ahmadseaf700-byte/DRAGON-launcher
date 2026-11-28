@@ -7,6 +7,7 @@ use std::{collections::HashMap, fs, io::{self, Read, Write}, net::{TcpStream, To
 use sysinfo::System;
 use tauri::{Emitter, Manager};
 use zip::ZipArchive;
+use xz2::read::XzDecoder;
 
 #[derive(Serialize)]
 struct SystemEnvironment {
@@ -400,6 +401,127 @@ async fn download_java_runtime(
     if destination.exists() { fs::remove_file(&destination).map_err(|e| format!("Could not replace old archive: {e}"))?; }
     fs::rename(&temporary, &destination).map_err(|e| format!("Could not finalize Java archive: {e}"))?;
     Ok(JavaRuntimeInstallResult { archive_path: destination.to_string_lossy().to_string(), bytes: bytes.len() as u64, sha256: digest, java_major })
+}
+
+
+#[derive(Serialize)]
+struct AndroidJavaRuntimeInstallStatus {
+    runtime_dir: String,
+    java_major: u32,
+    source_commit: String,
+    files_verified: bool,
+}
+
+/// Extract Pojav's repacked Android JRE: shared universal files first, then ARM64 binaries.
+/// This installs files only; it does not claim the Android JVM/game engine is launch-ready.
+#[tauri::command]
+fn install_android_java21_runtime(
+    archive_path: String,
+    source_commit: String,
+) -> Result<AndroidJavaRuntimeInstallStatus, String> {
+    if source_commit.len() != 40 || !source_commit.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err("Invalid upstream runtime revision".to_string());
+    }
+    let root = launcher_data_dir()?.join("runtimes").join("jre-21");
+    let downloads = root.join("downloads");
+    let archive = PathBuf::from(&archive_path).canonicalize()
+        .map_err(|e| format!("Downloaded Java artifact was not found: {e}"))?;
+    let downloads_canonical = downloads.canonicalize()
+        .map_err(|e| format!("Java download directory is missing: {e}"))?;
+    if !archive.starts_with(&downloads_canonical) || !archive.is_file() {
+        return Err("Java artifact is outside the launcher's managed download directory".to_string());
+    }
+
+    let file = fs::File::open(&archive).map_err(|e| format!("Could not open Java artifact: {e}"))?;
+    let mut zip = ZipArchive::new(file).map_err(|e| format!("Invalid Java artifact ZIP: {e}"))?;
+    let packaged_revision = {
+        let mut entry = zip.by_name("version")
+            .map_err(|_| "The artifact is missing its upstream version marker".to_string())?;
+        let mut value = String::new();
+        entry.take(128).read_to_string(&mut value)
+            .map_err(|e| format!("Could not read runtime version marker: {e}"))?;
+        value.trim().to_string()
+    };
+    if packaged_revision != source_commit {
+        return Err("The downloaded runtime revision does not match the verified build metadata".to_string());
+    }
+
+    let staging = root.join("install-staging");
+    if staging.exists() {
+        fs::remove_dir_all(&staging).map_err(|e| format!("Could not clear previous staging directory: {e}"))?;
+    }
+    fs::create_dir_all(&staging).map_err(|e| format!("Could not create Java staging directory: {e}"))?;
+
+    let extraction_result = (|| -> Result<(), String> {
+        for member in ["universal.tar.xz", "bin-arm64.tar.xz"] {
+            let mut entry = zip.by_name(member)
+                .map_err(|_| format!("Java artifact is missing required ARM64 component: {member}"))?;
+            if entry.size() == 0 || entry.size() > 512 * 1024 * 1024 {
+                return Err(format!("Invalid compressed runtime component size: {member}"));
+            }
+            let component = staging.join(member);
+            let mut output = fs::File::create(&component)
+                .map_err(|e| format!("Could not stage {member}: {e}"))?;
+            io::copy(&mut entry, &mut output)
+                .map_err(|e| format!("Could not extract {member} from artifact: {e}"))?;
+            output.flush().map_err(|e| format!("Could not flush {member}: {e}"))?;
+            let input = fs::File::open(&component)
+                .map_err(|e| format!("Could not open {member}: {e}"))?;
+            let decoder = XzDecoder::new(input);
+            let mut tar = tar::Archive::new(decoder);
+            let entries = tar.entries().map_err(|e| format!("Invalid {member} archive: {e}"))?;
+            let mut expanded = 0u64;
+            for item in entries {
+                let mut item = item.map_err(|e| format!("Could not read {member} entry: {e}"))?;
+                let path = item.path().map_err(|e| format!("Invalid path in {member}: {e}"))?.into_owned();
+                if path.is_absolute() || path.components().any(|c| matches!(c, std::path::Component::ParentDir | std::path::Component::RootDir | std::path::Component::Prefix(_))) {
+                    return Err(format!("Unsafe path in Java runtime component: {}", path.display()));
+                }
+                expanded = expanded.saturating_add(item.size());
+                if expanded > 2 * 1024 * 1024 * 1024 {
+                    return Err("Expanded Java runtime exceeds the 2 GB installation limit".to_string());
+                }
+                item.unpack_in(&staging)
+                    .map_err(|e| format!("Could not unpack Java runtime file {}: {e}", path.display()))?;
+            }
+            fs::remove_file(&component).map_err(|e| format!("Could not remove temporary component {member}: {e}"))?;
+        }
+        let jvm = staging.join("lib").join("server").join("libjvm.so");
+        let release = staging.join("release");
+        if !jvm.is_file() || !release.is_file() {
+            return Err("Extracted package is missing the ARM64 JVM library or release metadata".to_string());
+        }
+        let release_text = fs::read_to_string(&release)
+            .map_err(|e| format!("Could not verify Java release metadata: {e}"))?;
+        if !release_text.lines().any(|line| line.trim() == "JAVA_VERSION=\\"21\\"") {
+            return Err("Extracted runtime is not Java 21".to_string());
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = extraction_result {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(error);
+    }
+
+    let installed = root.join("runtime");
+    let backup = root.join("runtime.previous");
+    if backup.exists() { fs::remove_dir_all(&backup).map_err(|e| format!("Could not remove previous runtime backup: {e}"))?; }
+    if installed.exists() {
+        fs::rename(&installed, &backup).map_err(|e| format!("Could not preserve previous Java runtime: {e}"))?;
+    }
+    if let Err(error) = fs::rename(&staging, &installed) {
+        if backup.exists() { let _ = fs::rename(&backup, &installed); }
+        return Err(format!("Could not finalize Java 21 installation: {error}"));
+    }
+    if backup.exists() { let _ = fs::remove_dir_all(&backup); }
+
+    Ok(AndroidJavaRuntimeInstallStatus {
+        runtime_dir: installed.to_string_lossy().to_string(),
+        java_major: 21,
+        source_commit,
+        files_verified: true,
+    })
 }
 
 #[derive(Serialize)]
@@ -1769,7 +1891,7 @@ pub fn run() {
             }
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_system_environment, get_minecraft_version_manifest, get_java_runtime_download, get_android_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
+        .invoke_handler(tauri::generate_handler![get_system_environment, get_minecraft_version_manifest, get_java_runtime_download, get_android_java_runtime_download, download_java_runtime, install_android_java21_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
             save_launcher_config, download_modrinth_file, list_installed_mods, set_mod_enabled, delete_installed_mod, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
