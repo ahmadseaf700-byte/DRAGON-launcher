@@ -334,6 +334,17 @@ async fn get_android_java_runtime_download() -> Result<AndroidJavaRuntimeDownloa
     })
 }
 
+fn allowed_github_artifact_host(host: &str) -> bool {
+    matches!(
+        host,
+        "api.github.com"
+            | "github.com"
+            | "githubusercontent.com"
+            | "objects.githubusercontent.com"
+            | "release-assets.githubusercontent.com"
+    ) || (host.starts_with("productionresultssa") && host.ends_with(".blob.core.windows.net"))
+}
+
 #[tauri::command]
 async fn download_java_runtime(
     download_url: String,
@@ -358,12 +369,21 @@ async fn download_java_runtime(
     if archive_size.map(|n| n > 512 * 1024 * 1024).unwrap_or(false) {
         return Err("Java archive exceeds the 512 MB safety limit".to_string());
     }
-    let client = reqwest::Client::builder().redirect(reqwest::redirect::Policy::limited(5)).build()
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let host = attempt.url().host_str().unwrap_or_default();
+            if attempt.url().scheme() == "https" && allowed_github_artifact_host(host) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()
         .map_err(|e| format!("Could not create download client: {e}"))?;
     let response = client.get(url.clone()).send().await.map_err(|e| format!("Java download failed: {e}"))?;
     if !response.status().is_success() { return Err(format!("Java download returned HTTP {}", response.status())); }
     let final_host = response.url().host_str().unwrap_or_default();
-    if !matches!(final_host, "api.github.com" | "github.com" | "githubusercontent.com" | "objects.githubusercontent.com" | "release-assets.githubusercontent.com") {
+    if response.url().scheme() != "https" || !allowed_github_artifact_host(final_host) {
         return Err("Download redirected outside approved HTTPS hosts".to_string());
     }
     if let Some(expected) = archive_size {
