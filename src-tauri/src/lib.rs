@@ -565,6 +565,20 @@ mod minecraft_rule_tests {
     }
 
     #[test]
+    fn different_artifact_names_in_same_group_are_not_collapsed() {
+        let parent = json!({
+            "libraries": [{"name":"org.example:base:1.0"}]
+        });
+        let child = json!({
+            "libraries": [{"name":"org.example:base-extra:1.0"}]
+        });
+        let merged = merge_inherited_version_metadata(&parent, &child).unwrap();
+        assert_eq!(merged["libraries"].as_array().unwrap().len(), 2);
+        assert_eq!(merged["libraries"][0]["name"], "org.example:base:1.0");
+        assert_eq!(merged["libraries"][1]["name"], "org.example:base-extra:1.0");
+    }
+
+    #[test]
     fn child_metadata_overrides_parent_scalar_fields() {
         let parent = json!({"id":"base","type":"release","mainClass":"Parent"});
         let child = json!({"id":"child","type":"snapshot","mainClass":"Child","inheritsFrom":"base"});
