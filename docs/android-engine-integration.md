@@ -26,6 +26,32 @@ This exposes a concrete gap in DRAGON: checking that `lib/server/libjvm.so` exis
 
 The upstream Android Gradle build also uses more than a CMake JNI probe: it builds native code through `Android.mk`/ndk-build, packages multiple native AARs, and builds the `jre_lwjgl3glfw` project. The exact module/dependency graph must be ported deliberately rather than approximated by adding a single Maven dependency.
 
+## Pinned upstream source map (reviewed 2026-11-28)
+
+Reviewed upstream ref:
+- Repository: https://github.com/AngelAuraMC/Amethyst-Android
+- Branch: `v3_openjdk`
+- Exact commit: `9423d6054115767b56de7ed0b83ed18fc1eba3c2`
+- Top-level project license: LGPL-3.0; individual dependencies retain their own licenses.
+
+The first port should be based on these engine-facing units, not on copying Amethyst's launcher UI:
+
+| DRAGON responsibility | Upstream reference | What must be adapted |
+| --- | --- | --- |
+| Android runtime bootstrap | `app_pojavlauncher/src/main/java/net/kdt/pojavlaunch/utils/JREUtils.java` | Architecture-aware JRE layout, native library loading, environment variables, renderer setup, and runtime lifecycle. It depends on Pojav/Amethyst application utilities, so it cannot be copied as a standalone class. |
+| JVM entry point | `app_pojavlauncher/src/main/java/com/oracle/dalvik/VMLauncher.java` + `app_pojavlauncher/src/main/jni/jre_launcher.c` | The upstream path calls `JLI_Launch` from `libjli.so` with a complete argument vector. DRAGON's current JNI smoke probe instead calls `JNI_CreateJavaVM`; that is not an equivalent Minecraft launch pipeline. |
+| LWJGL/GLFW Android backend | `:jre_lwjgl3glfw` (including the version-specific `lwjgl-3.3.3` and `lwjgl-3.4.1` modules) | Build the Android GLFW stub and matching Java/native artifacts together. Do not package desktop GLFW binaries as Android substitutes. |
+| Input bridge | `app_pojavlauncher/src/main/jni/input_bridge_v3.c` and `jre_lwjgl3glfw/lwjgl-3.4.1/src/main/java/org/lwjgl/glfw/CallbackBridge.java` | Replace DRAGON's unconsumed queue with the upstream-compatible GLFW callback bridge, adapted to DRAGON's Activity and touch controls. |
+| Rendering bridge | `jre_lwjgl3glfw/lwjgl-3.4.1/src/main/java/org/lwjgl/opengl/PojavRendererInit.java` plus the selected renderer's native libraries | Initialize a supported renderer against the engine's EGL lifecycle. A standalone GLES2 clear screen is not sufficient. |
+| Android native build | `app_pojavlauncher/src/main/jni/Android.mk`, `app_pojavlauncher/build.gradle`, and `:jre_lwjgl3glfw` | Port the required NDK modules, ABI filters, AAR/native packaging, and Gradle task dependencies into a dedicated DRAGON Android engine module. |
+
+Important implementation correction:
+- Do not treat a successful `dlopen(libjvm.so)` or `JNI_CreateJavaVM` symbol lookup as proof that the Pojav-compatible runtime is ready.
+- The first real engine milestone must use the matching Android JRE layout, initialize the runtime environment, load its native dependencies, and execute a minimal Java program through the selected launch path.
+- Only after that milestone passes should the full Minecraft classpath, natives, assets, session data, LWJGL/GLFW, renderer, and touch input be connected.
+
+No Amethyst source file is copied by this documentation change. Any later source port must retain its applicable copyright/license headers and be tracked in DRAGON's third-party notices; the DRAGON brand does not replace upstream authorship or license obligations.
+
 ## License and dependency gate
 
 The reviewed Amethyst branch states that Amethyst is LGPLv3. Its README also lists dependencies with different licenses, including PojavLauncher (GLGPL), GL4ES (MIT), MobileGlues (LGPL-2.1), LWJGL3 (BSD-3-Clause), OpenJDK components (GPLv2), SDL (zlib), OpenAL-Soft (GPLv2), and other native components. It also lists LWJGLX with an unknown license.
