@@ -20,6 +20,14 @@ struct SystemEnvironment {
     java_path: Option<String>,
 }
 
+#[cfg(target_os = "android")]
+fn detect_java_runtime() -> (bool, Option<String>, Option<String>) {
+    // Android's ART runtime is not a desktop JVM. A valid Minecraft runtime must
+    // be registered by the dedicated native Android engine, not inferred from PATH.
+    (false, None, None)
+}
+
+#[cfg(not(target_os = "android"))]
 fn detect_java_runtime() -> (bool, Option<String>, Option<String>) {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Some(home) = std::env::var_os("JAVA_HOME") {
