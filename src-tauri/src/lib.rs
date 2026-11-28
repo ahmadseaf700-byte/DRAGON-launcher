@@ -1226,8 +1226,89 @@ fn save_launcher_config(app: tauri::AppHandle, config: Value) -> Result<(), Stri
     Ok(())
 }
 
+fn selected_mods_dir(app: &tauri::AppHandle, instance_id: Option<String>) -> Result<PathBuf, String> {
+    if let Some(id) = instance_id {
+        if id.is_empty() || id.len() > 100 || !id.chars().all(|c| c.is_ascii_alphanumeric() || "-_".contains(c)) {
+            return Err("Invalid instance identifier".to_string());
+        }
+        let dir = launcher_data_dir()?.join("instances").join(&id);
+        let metadata: Value = serde_json::from_slice(&fs::read(dir.join("instance.json"))
+            .map_err(|_| "The selected game instance does not exist".to_string())?)
+            .map_err(|e| format!("Invalid instance metadata: {e}"))?;
+        if metadata.get("id").and_then(Value::as_str) != Some(id.as_str()) {
+            return Err("Instance identity verification failed".to_string());
+        }
+        let mods = dir.join("mods");
+        fs::create_dir_all(&mods).map_err(|e| format!("Could not create instance mods folder: {e}"))?;
+        return Ok(mods);
+    }
+    let data_dir = launcher_data_dir()?;
+    let config_path = config_file(app)?;
+    let config: Value = if config_path.exists() {
+        serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({}))
+    } else { json!({}) };
+    let game_dir = config.get("game_directory").and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
+    let mods = game_dir.join("mods");
+    fs::create_dir_all(&mods).map_err(|e| format!("Could not create mods folder: {e}"))?;
+    Ok(mods)
+}
+
 #[tauri::command]
-async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String) -> Result<String, String> {
+fn list_installed_mods(app: tauri::AppHandle, instance_id: Option<String>) -> Result<Vec<Value>, String> {
+    let root = selected_mods_dir(&app, instance_id)?;
+    let mut files = Vec::new();
+    for entry in fs::read_dir(&root).map_err(|e| format!("Could not read mods folder: {e}"))? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        if !entry.file_type().map_err(|e| e.to_string())?.is_file() { continue; }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let lower = name.to_ascii_lowercase();
+        let disabled = lower.ends_with(".jar.disabled");
+        if !lower.ends_with(".jar") && !disabled { continue; }
+        files.push(json!({"filename":name,"enabled":!disabled,"bytes":entry.metadata().map(|m| m.len()).unwrap_or(0)}));
+    }
+    files.sort_by(|a,b| a["filename"].as_str().cmp(&b["filename"].as_str()));
+    Ok(files)
+}
+
+#[tauri::command]
+fn set_mod_enabled(app: tauri::AppHandle, instance_id: Option<String>, filename: String, enabled: bool) -> Result<String, String> {
+    if filename.is_empty() || filename.len() > 220 || filename.contains('/') || filename.contains('\\\\') || filename.contains("..") {
+        return Err("Invalid mod filename".to_string());
+    }
+    let lower = filename.to_ascii_lowercase();
+    if !(lower.ends_with(".jar") || lower.ends_with(".jar.disabled")) { return Err("Only JAR mods can be toggled".to_string()); }
+    let root = selected_mods_dir(&app, instance_id)?;
+    let source = root.join(&filename);
+    if !source.is_file() { return Err("Mod file was not found".to_string()); }
+    let target_name = if enabled {
+        filename.strip_suffix(".disabled").or_else(|| filename.strip_suffix(".DISABLED"))
+            .ok_or("Mod is already enabled")?.to_string()
+    } else {
+        if lower.ends_with(".jar.disabled") { return Err("Mod is already disabled".to_string()); }
+        format!("{filename}.disabled")
+    };
+    let target = root.join(target_name);
+    if target.exists() { return Err("A file with the target name already exists".to_string()); }
+    fs::rename(&source, &target).map_err(|e| format!("Could not change mod state: {e}"))?;
+    Ok(target.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn delete_installed_mod(app: tauri::AppHandle, instance_id: Option<String>, filename: String) -> Result<(), String> {
+    if filename.is_empty() || filename.len() > 220 || filename.contains('/') || filename.contains('\\\\') || filename.contains("..") {
+        return Err("Invalid mod filename".to_string());
+    }
+    let lower = filename.to_ascii_lowercase();
+    if !(lower.ends_with(".jar") || lower.ends_with(".jar.disabled")) { return Err("Only JAR mods can be deleted".to_string()); }
+    let root = selected_mods_dir(&app, instance_id)?;
+    let target = root.join(&filename);
+    if !target.is_file() { return Err("Mod file was not found".to_string()); }
+    fs::remove_file(target).map_err(|e| format!("Could not delete mod: {e}"))
+}
+
+#[tauri::command]
+async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: String, kind: String, instance_id: Option<String>) -> Result<String, String> {
     let parsed = reqwest::Url::parse(&url).map_err(|e| format!("Invalid download URL: {e}"))?;
     if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
         return Err("Downloads are only allowed from the official Modrinth CDN over HTTPS".to_string());
@@ -1259,10 +1340,7 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
     }
     if bytes.is_empty() { return Err("The downloaded file is empty".to_string()); }
     let data_dir = launcher_data_dir()?;
-    let config_path = config_file(&app)?;
-    let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
-    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let base = if kind == "mod" { game_dir.join(folder) } else { data_dir.join(folder) };
+    let base = if kind == "mod" { selected_mods_dir(&app, instance_id)? } else { data_dir.join(folder) };
     fs::create_dir_all(&base).map_err(|e| e.to_string())?;
     let mut destination = base.join(&filename);
     if destination.exists() {
@@ -1289,7 +1367,7 @@ async fn download_modrinth_file(app: tauri::AppHandle, url: String, filename: St
 
 
 #[tauri::command]
-fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String) -> Result<String, String> {
+fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: String, instance_id: Option<String>) -> Result<String, String> {
     if filename.len() > 180 || !filename.to_ascii_lowercase().ends_with(".jar")
         || filename.contains('/') || filename.contains('\\')
         || filename == "." || filename == ".." {
@@ -1302,12 +1380,7 @@ fn import_external_mod(app: tauri::AppHandle, filename: String, data_base64: Str
     if bytes.len() < 4 || bytes.len() > 100 * 1024 * 1024 || &bytes[0..2] != b"PK" {
         return Err("The selected file is not a valid JAR/ZIP archive or exceeds 100 MB".to_string());
     }
-    let data_dir = launcher_data_dir()?;
-    let config_path = config_file(&app)?;
-    let config: Value = if config_path.exists() { serde_json::from_slice(&fs::read(config_path).map_err(|e| e.to_string())?).unwrap_or_else(|_| json!({})) } else { json!({}) };
-    let game_dir = config.get("game_directory").and_then(Value::as_str).filter(|s| !s.trim().is_empty()).map(PathBuf::from).unwrap_or_else(|| data_dir.join("game"));
-    let mods_dir = game_dir.join("mods");
-    fs::create_dir_all(&mods_dir).map_err(|e| format!("Could not create mods folder: {e}"))?;
+    let mods_dir = selected_mods_dir(&app, instance_id)?;
     let mut destination = mods_dir.join(&filename);
     if destination.exists() {
         let stem = Path::new(&filename).file_stem().and_then(|v| v.to_str()).unwrap_or("mod");
@@ -1494,6 +1567,6 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![get_system_environment, get_minecraft_version_manifest, get_java_runtime_download, download_java_runtime, install_java_runtime, validate_java_executable, check_java_compatibility, list_game_instances, create_game_instance, delete_game_instance, rename_game_instance, open_instance_folder, load_launcher_config,
-            save_launcher_config, download_modrinth_file, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
+            save_launcher_config, download_modrinth_file, list_installed_mods, set_mod_enabled, delete_installed_mod, is_minecraft_version_installed, install_minecraft_version, import_external_mod, read_game_log, launch_minecraft, get_game_process_status, stop_game_process, ping_minecraft_server])
         .run(tauri::generate_context!()).expect("Failed to run DRAGON Launcher");
 }
