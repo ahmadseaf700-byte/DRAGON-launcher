@@ -5,7 +5,6 @@ import android.graphics.Color
 import android.os.Bundle
 import android.view.Gravity
 import android.view.MotionEvent
-import android.view.View
 import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -21,6 +20,12 @@ class DragonGameActivity : Activity() {
         const val EXTRA_RUNTIME_DIR = "dragon.runtimeDir"
         const val EXTRA_VERSION_ID = "dragon.versionId"
         const val EXTRA_RAM_MB = "dragon.ramMb"
+        private const val FORWARD_KEY = 87
+        private const val LEFT_KEY = 65
+        private const val BACK_KEY = 83
+        private const val RIGHT_KEY = 68
+        private const val JUMP_KEY = 32
+        private const val ATTACK_KEY = 1
     }
 
     private var surface: GLSurfaceView? = null
@@ -36,8 +41,7 @@ class DragonGameActivity : Activity() {
         val runtimeDir = intent.getStringExtra(EXTRA_RUNTIME_DIR).orEmpty()
         val versionId = intent.getStringExtra(EXTRA_VERSION_ID).orEmpty()
         val ramMb = intent.getIntExtra(EXTRA_RAM_MB, 2048)
-        val root = File(runtimeDir)
-        val jvmLibrary = File(root, "lib/server/libjvm.so")
+        val jvmLibrary = File(File(runtimeDir), "lib/server/libjvm.so")
 
         val frame = FrameLayout(this).apply { setBackgroundColor(Color.rgb(10, 14, 22)) }
         val gl = GLSurfaceView(this).apply {
@@ -59,23 +63,15 @@ class DragonGameActivity : Activity() {
             text = "DRAGON Android game surface\nChecking Java runtime…"
         }
         panel.addView(status)
-        val panelParams = FrameLayout.LayoutParams(-1, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP)
-        frame.addView(panel, panelParams)
+        frame.addView(panel, FrameLayout.LayoutParams(-1, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.TOP))
 
         val controls = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(12, 12, 12, 18)
         }
-        listOf("W", "A", "S", "D", "JUMP", "ATTACK").forEach { label ->
-            val key = when (label) {
-                "W" ->  forwardKey
-                "A" -> leftKey
-                "S" -> backKey
-                "D" -> rightKey
-                "JUMP" -> jumpKey
-                else -> attackKey
-            }
+        listOf("W" to FORWARD_KEY, "A" to LEFT_KEY, "S" to BACK_KEY,
+            "D" to RIGHT_KEY, "JUMP" to JUMP_KEY, "ATTACK" to ATTACK_KEY).forEach { (label, key) ->
             val button = Button(this).apply {
                 text = label
                 isAllCaps = false
@@ -100,7 +96,7 @@ class DragonGameActivity : Activity() {
             probeJvm(runtimeDir)
         }.getOrElse { "Native JVM probe unavailable: ${it.message}" }
         val packageStatus = if (jvmLibrary.isFile) "libjvm.so found" else "libjvm.so missing"
-        status.text = "DRAGON Android engine bootstrap\nMinecraft: $versionId · RAM: $ramMb MB\n$packageStatus\n$nativeStatus\n\nThe game engine is not linked yet; this screen verifies the Android surface and input layer only."
+        status.text = "DRAGON Android engine bootstrap\nMinecraft: $versionId · RAM: $ramMb MB\n$packageStatus\n$nativeStatus\n\nThe Minecraft engine is not linked yet. This screen verifies the Android surface and touch-event queue only."
     }
 
     override fun onPause() {
@@ -128,14 +124,5 @@ class DragonGameActivity : Activity() {
         override fun onDrawFrame(gl: GL10?) {
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
         }
-    }
-
-    companion object Keys {
-        const val forwardKey = 87
-        const val leftKey = 65
-        const val backKey = 83
-        const val rightKey = 68
-        const val jumpKey = 32
-        const val attackKey = 1
     }
 }
