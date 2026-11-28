@@ -496,7 +496,7 @@ fn install_android_java21_runtime(
         }
         let release_text = fs::read_to_string(&release)
             .map_err(|e| format!("Could not verify Java release metadata: {e}"))?;
-        if !release_text.lines().any(|line| line.trim().starts_with("JAVA_VERSION=\\\"21")) {
+        if !release_text.lines().any(|line| line.trim().starts_with(r#"JAVA_VERSION="21"#)) {
             return Err("Extracted runtime is not Java 21".to_string());
         }
         Ok(())
