@@ -37,12 +37,38 @@ export default function App() {
   const [launchError, setLaunchError] = useState("");
   const [versionInstalled, setVersionInstalled] = useState(false);
   const [javaCompatibility, setJavaCompatibility] = useState<string>("");
+  const [runtimeDownloadBusy, setRuntimeDownloadBusy] = useState(false);
+  const [runtimeDownloadMessage, setRuntimeDownloadMessage] = useState("");
   const [checkingVersion, setCheckingVersion] = useState(false);
   const [activeGamePid, setActiveGamePid] = useState<number | null>(null);
   const [selectedInstance, setSelectedInstance] = useState<GameInstance | null>(() => { try { const raw = localStorage.getItem("dragon.activeInstance"); return raw ? JSON.parse(raw) as GameInstance : null; } catch { return null; } });
   const effectiveVersion = selectedInstance?.version_id || selectedVersion;
   const [stoppingGame, setStoppingGame] = useState(false);
   const native = isTauri();
+
+  const downloadAndroidJava21 = async () => {
+    if (!native || runtimeDownloadBusy) return;
+    setRuntimeDownloadBusy(true);
+    setRuntimeDownloadMessage("");
+    try {
+      const metadata = await invoke<{ download_url: string; checksum_sha256: string; archive_size: number; java_major: number; platform: string }>("get_android_java_runtime_download");
+      const result = await invoke<{ archive_path: string; bytes: number; sha256: string; java_major: number }>("download_java_runtime", {
+        downloadUrl: metadata.download_url,
+        checksumSha256: metadata.checksum_sha256,
+        archiveSize: metadata.archive_size,
+        javaMajor: metadata.java_major,
+        platform: metadata.platform
+      });
+      const sizeMb = (result.bytes / 1024 / 1024).toFixed(1);
+      setRuntimeDownloadMessage(lang === "ar"
+        ? "تم تنزيل حزمة Java 21 والتحقق من سلامتها (" + sizeMb + " MB). لم يتم تثبيتها أو تفعيلها بعد."
+        : "Java 21 package downloaded and SHA-256 verified (" + sizeMb + " MB). It is not installed or activated yet.");
+    } catch (error) {
+      setRuntimeDownloadMessage((lang === "ar" ? "فشل تنزيل Java: " : "Java download failed: ") + String(error));
+    } finally {
+      setRuntimeDownloadBusy(false);
+    }
+  };
 
   useEffect(() => {
     document.documentElement.lang = lang;
@@ -267,6 +293,16 @@ export default function App() {
                       <div><dt>{t.totalMemory}</dt><dd>{Math.round(system.total_ram_mb / 1024)} GB</dd></div>
                       <div className="directory-row"><dt>{t.dataDirectory}</dt><dd>{system.launcher_dir}</dd></div>
                     </dl>
+                    {system.os.toLowerCase() === "android" && (
+                      <div className="runtime-download-actions">
+                        <button className="text-action" onClick={() => void downloadAndroidJava21()} disabled={runtimeDownloadBusy}>
+                          <Download size={15} /> {runtimeDownloadBusy
+                            ? (lang === "ar" ? "جارٍ تنزيل Java 21..." : "Downloading Java 21...")
+                            : (lang === "ar" ? "تنزيل Java 21 لأندرويد ARM64" : "Download Java 21 for Android ARM64")}
+                        </button>
+                        {runtimeDownloadMessage && <p className="memory-note" role="status">{runtimeDownloadMessage}</p>}
+                      </div>
+                    )}
                   ) : <div className="empty-state">{systemError ? t.unavailable : native ? t.loading : t.unavailable}</div>}
                 </article>
                 <article className="panel-card memory-card">
