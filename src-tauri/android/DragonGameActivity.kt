@@ -32,7 +32,7 @@ class DragonGameActivity : Activity() {
     private var surface: GLSurfaceView? = null
     private lateinit var status: TextView
 
-    private external fun probeJvm(runtimeDir: String): String
+    private external fun startJvmSmokeTest(runtimeDir: String): String
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -118,12 +118,19 @@ class DragonGameActivity : Activity() {
         frame.addView(lookPad, FrameLayout.LayoutParams(dp(190), dp(210), Gravity.END or Gravity.CENTER_VERTICAL))
         setContentView(frame)
 
-        val nativeStatus = runCatching {
-            System.loadLibrary("dragon_jvm_bridge")
-            probeJvm(runtimeDir)
-        }.getOrElse { "Native JVM probe unavailable: ${it.message}" }
         val packageStatus = if (jvmLibrary.isFile) "libjvm.so found" else "libjvm.so missing"
-        status.text = "DRAGON Android engine bootstrap\nMinecraft: $versionId · RAM: $ramMb MB\n$packageStatus\n$nativeStatus\n\nThe Minecraft engine is not linked yet. This screen verifies the Android surface and touch-event queue only."
+        status.text = "DRAGON Android engine bootstrap\nMinecraft: $versionId · RAM: $ramMb MB\n$packageStatus\nStarting a real Java VM smoke test…\n\nMinecraft rendering and GLFW are not connected yet."
+        Thread({
+            val vmStatus = runCatching {
+                System.loadLibrary("dragon_jvm_bridge")
+                startJvmSmokeTest(runtimeDir)
+            }.getOrElse { "Java VM startup failed: ${it.message}" }
+            runOnUiThread {
+                if (!isFinishing && !isDestroyed) {
+                    status.text = "DRAGON Android engine bootstrap\nMinecraft: $versionId · RAM: $ramMb MB\n$packageStatus\n$vmStatus\n\nThis verifies JVM startup only; Minecraft, LWJGL/GLFW, renderer and input are not connected yet."
+                }
+            }
+        }, "dragon-jvm-smoke-test").start()
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
