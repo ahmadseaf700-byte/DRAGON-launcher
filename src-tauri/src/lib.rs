@@ -372,7 +372,10 @@ async fn download_java_runtime(
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
             let host = attempt.url().host_str().unwrap_or_default();
-            if attempt.url().scheme() == "https" && allowed_github_artifact_host(host) {
+            if attempt.previous().len() < 5
+                && attempt.url().scheme() == "https"
+                && allowed_github_artifact_host(host)
+            {
                 attempt.follow()
             } else {
                 attempt.stop()
